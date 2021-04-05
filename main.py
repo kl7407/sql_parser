@@ -50,16 +50,15 @@ class DataBase:
             userInput += self._getInput(isTest, testFile)
         try:
             command = sql_parser.parse(userInput)
-            print(command)
             query_list = command.children[0]
             for query in query_list.children:
                 query_type = query.children[0].data
                 if query_type == "create_table_query":
                     self._createTable(query.children[0])
                 elif query_type == "drop_table_query":
-                    print("DROP_TABLE_QUERY")
+                    self._dropTable(query)
                 elif query_type == "desc_query":
-                    print("DESC_QUERY")
+                    self._desc(query)
                 elif query_type == "insert_query":
                     print("INSERT_QUERY")
                 elif query_type == "delete_query":
@@ -109,7 +108,6 @@ class DataBase:
                         if children[0].type != 'PRIMARY' or children[1].type != 'KEY':
                             raise SyntaxError
                         assert children[2].data == 'column_name_list'
-                        print(children[2])
                         colNameList = children[2].children
                         if colNameList[0].type != 'LP' or colNameList[len(colNameList)-1].type != 'RP':
                             raise SyntaxError
@@ -139,14 +137,36 @@ class DataBase:
             self._putInstruction('Syntax error')
 
     def _dropTable(self, query):
+        self._putInstruction("DROP_TABLE_QUERY")
         try:
-            print(query)
-            pass
+            dropTableQuery = query.children[0]
+            assert dropTableQuery.data == 'drop_table_query'
+            assert dropTableQuery.children[0].type == 'DROP' and dropTableQuery.children[1].type == 'TABLE'
+            assert dropTableQuery.children[2].data == 'table_name'
+            tableName = dropTableQuery.children[2].children[0].value
+            idx = -1
+            for i in range(len(self.tables)):
+                if self.tables[i].name == tableName:
+                    idx = i
+                    break
+            if idx == -1:
+                raise SyntaxError
+            self.tables.pop(idx)
+            print(self.tables)
         except:
             self._putInstruction('Syntax error')
 
     def _desc(self, query):
-        pass
+        try:
+            descQuery = query.children[0]
+            children = descQuery.children
+            assert descQuery.data == 'desc_query'
+            assert children[0].type == 'DESC' and children[1].data == 'table_name'
+            tableName = children[1].children[0].value
+            # TODO: 추후 업데이트 해야 될 영역.
+            return tableName
+        except:
+            self._putInstruction('Syntax error')
 
     def _insert(self, query):
         pass

@@ -52,6 +52,7 @@ command : query_list | EXIT ";"
 query_list : (query ";")+
 query : create_table_query
       | drop_table_query
+      | desc_query
       | select_query
       | insert_query
       | delete_query
