@@ -1,0 +1,5 @@
+create table account (
+account_number int not null,
+     branch_name char(15),
+     primary key(account_number)
+);
