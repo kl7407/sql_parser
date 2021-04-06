@@ -17,7 +17,7 @@ def parseParenthesis(tree: Tree):
     isAlright = True
     fLen = len(tableElementList)
     try:
-        if not isinstance(tableElementList[0], Tree):
+        if isinstance(tableElementList[0], Token):
             hasLP = tableElementList[0].type == 'LP'
             hasRP = tableElementList[fLen - 1].type == 'RP'
             if not hasLP or not hasRP:
@@ -60,7 +60,7 @@ class DataBase:
                 elif query_type == "desc_query":
                     self._desc(query)
                 elif query_type == "insert_query":
-                    print("INSERT_QUERY")
+                    self._insert(query)
                 elif query_type == "delete_query":
                     print("DELETE_QUERY")
                 elif query_type == "select_query":
@@ -69,29 +69,42 @@ class DataBase:
                     print("SHOW_TABLE_QUERY")
                 else:
                     raise SyntaxError
-        except Exception:
+        except:
             self._putInstruction('Syntax error')
 
     def _createTable(self, query):
         self._putInstruction("CREATE_TABLE_QUERY")
         try:
-            tableNameToken = list(query.find_data("table_name"))[0].children[0]
-            assert tableNameToken.type == 'IDENTIFIER'
-            tableName = tableNameToken.value
+            # syntax 확인
+            assert query.data == 'create_table_query' and \
+                   query.children[0].type == 'CREATE' and query.children[1].type == 'TABLE' and \
+                   query.children[2].data == 'table_name' and query.children[3].data == 'table_element_list'
+            tableName = query.children[2].children[0].value
             newTable = Table(tableName)
-            tableElementListTree = list(query.find_data('table_element_list'))[0]
-            tableElementList = tableElementListTree.children
+            tableElementList = query.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
-            if tableElementList[0].type != 'LP' or tableElementList[len(tableElementList)-1].type != 'RP':
-                raise SyntaxError
-            for elementTree in list(query.find_data('table_element')):
-                # 새로운 column에 해당하는 정보일 경우 column 새로 생성해줌.
+            assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList)-1].type == 'RP'
+            tableElementList = tableElementList[1:len(tableElementList)-1]
+
+            for elementTree in tableElementList:
+                # syntax 확인
+                assert elementTree.data == 'table_element'
+                # 새로운 column 에 해당하는 정보일 경우 column 새로 생성해줌.
                 if elementTree.children[0].data == 'column_definition':
-                    columnNameTree = list(elementTree.find_data('column_name'))[0]
-                    columnTypeTree = list(elementTree.find_data('data_type'))[0]
+                    tokenLen = len(elementTree.children[0].children)
+                    elements = elementTree.children[0].children
+                    assert tokenLen == 2 or tokenLen == 4
+                    assert elements[0].data == 'column_name'
+                    assert elements[1].data == 'data_type'
+                    isNotNull = False
+                    if tokenLen == 4 and elements[2].type == 'NOT' and elements[3].type == 'NULL':
+                        isNotNull = True
+                    columnNameTree = elementTree.children[0].children[0]
+                    columnTypeTree = elementTree.children[0].children[1]
                     columnInfo = dict()
                     columnInfo['name'] = columnNameTree.children[0].value
                     columnInfo['type'] = columnTypeTree.children[0].value
+                    columnInfo['notNull'] = isNotNull
                     # 길이 정보가 있을 경우 추가해줌.
                     if len(columnTypeTree.children) != 1:
                         tokens = columnTypeTree.children
@@ -105,22 +118,18 @@ class DataBase:
                     constraintTypeTree = constraintTree.children[0]
                     if constraintTypeTree.data == 'primary_key_constraint':
                         children = constraintTypeTree.children
-                        if children[0].type != 'PRIMARY' or children[1].type != 'KEY':
-                            raise SyntaxError
+                        assert children[0].type == 'PRIMARY' and children[1].type == 'KEY'
                         assert children[2].data == 'column_name_list'
                         colNameList = children[2].children
-                        if colNameList[0].type != 'LP' or colNameList[len(colNameList)-1].type != 'RP':
-                            raise SyntaxError
+                        assert colNameList[0].type == 'LP' and colNameList[len(colNameList)-1].type == 'RP'
                         colNameList = colNameList[1:len(colNameList)-1]
                         for colNameTree in colNameList:
                             assert colNameTree.data == 'column_name'
                             colName = colNameTree.children[0].value
-                            if newTable.setPrimaryKey(colName) != 1:
-                                raise SyntaxError
+                            assert newTable.setPrimaryKey(colName) == 1
                     elif constraintTypeTree.data == 'referential_constraint':
                         children = constraintTypeTree.children
-                        if children[0].type != 'FOREIGN' or children[1].type != 'KEY':
-                            raise SyntaxError
+                        assert children[0].type == 'FOREIGN' and children[1].type == 'KEY'
                         assert children[2].data == 'column_name'
                         colNameTree = children[2]
                         colName = colNameTree.children[0].value
@@ -169,9 +178,117 @@ class DataBase:
             self._putInstruction('Syntax error')
 
     def _insert(self, query):
-        pass
+        try:
+            self._putInstruction('INSERT_QUERY')
+            insertQuery = query.children[0]
+            assert insertQuery.data == 'insert_query'
+            assert insertQuery.children[0].type == 'INSERT'
+            assert insertQuery.children[1].type == 'INTO'
+            assert insertQuery.children[2].data == 'table_name'
+            assert insertQuery.children[3].data == 'insert_columns_and_sources'
+            tableNameTree = insertQuery.children[2]
+            sourceTree = insertQuery.children[3]
+            print(sourceTree)
+
+            tableName = tableNameTree.children[0].value
+            table = None
+            for t in self.tables:
+                if t.name == tableName:
+                    table = t
+                    break
+            if table is None:
+                raise SyntaxError
+
+            colData = []
+            # column name list 가 있을 때
+            if len(sourceTree.children) == 2:
+                # 타입 확인.
+                assert sourceTree.children[0].data == 'column_name_list'
+                assert sourceTree.children[1].data == 'value_list'
+                colTokenList = sourceTree.children[0].children
+                valTokenList = sourceTree.children[1].children
+                # 괄호 및 'value' 확인
+                assert colTokenList[0].type == 'LP' and colTokenList[len(colTokenList)-1].type == 'RP'
+                assert valTokenList[0].type == 'VALUES' and \
+                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList)-1].type == 'RP'
+                colTreeList = colTokenList[1:len(colTokenList)-1]
+                valTreeList = valTokenList[2:len(valTokenList)-1]
+                assert len(colTreeList) == len(valTreeList)
+                for i in range(len(colTreeList)):
+                    colTree = colTreeList[i]
+                    valTree = valTreeList[i]
+                    assert colTree.data == 'column_name' and valTree.data == 'value'
+                    assert colTree.children[0].type == 'IDENTIFIER'
+                    data = dict()
+                    data['column_name'] = colTree.children[0].value
+                    data['type'] = valTree.children[0].children[0].type
+                    data['value'] = valTree.children[0].children[0].value
+                    if data['type'] == 'INT':
+                        data['value'] = int(data['value'])
+                    if data['type'] == 'STR':
+                        # string 일 경우 따옴표 체크
+                        assert data['value'][0] == data['value'][len(data['value'][0])-1] and \
+                               data['value'][0] in ['\'', '"']
+                        data['value'] = data['value'][1:len(data['value'])-1]
+                    if data['type'] == 'NULL':
+                        print('is null')
+                        data['value'] = None
+                    colData.append(data)
+            # value 만 있을 때
+            elif len(sourceTree.children) == 1:
+                assert sourceTree.children[0].data == 'value_list'
+                valTokenList = sourceTree.children[0].children
+                assert valTokenList[0].type == 'VALUES' and \
+                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList)-1].type == 'RP'
+                valTreeList = valTokenList[2:len(valTokenList) - 1]
+                assert len(table.cols) == len(valTreeList)
+                for i in range(len(table.cols)):
+                    valTree = valTreeList[i]
+                    assert valTree.data == 'value'
+                    data = dict()
+                    data['column_name'] = table.cols[i]['name']
+                    if isinstance(valTree.children[0], Tree):
+                        data['type'] = valTree.children[0].children[0].type
+                        data['value'] = valTree.children[0].children[0].value
+                    elif isinstance(valTree.children[0], Token):
+                        assert valTree.children[0].type == 'NULL'
+                        data['type'] = valTree.children[0].type
+                        data['value'] = None
+                    if data['type'] == 'INT':
+                        data['value'] = int(data['value'])
+                    if data['type'] == 'STR':
+                        # string 일 경우 따옴표 체크
+                        assert data['value'][0] == data['value'][len(data['value'][0])-1] and \
+                               data['value'][0] in ['\'', '"']
+                        data['value'] = data['value'][1:len(data['value'])-1]
+                    colData.append(data)
+            else:
+                raise SyntaxError
+            row = []
+            for data in colData:
+                row.append(None)
+                idx = -1
+                for i in range(len(table.cols)):
+                    c = table.cols[i]
+                    if c['name'] == data['column_name']:
+                        idx = i
+                        break
+                assert idx != -1
+                col = table.cols[idx]
+                if data['type'] == 'NULL':
+                    assert not col['notNull']
+                else:
+                    assert col['type'] == 'int' and data['type'] == 'INT' or \
+                           col['type'] == 'char' and data['type'] == 'STR' or \
+                           col['type'] == 'date' and data['type'] == 'DATE'
+                    row[idx] = data['value']
+            table.rows.append(row)
+        except:
+            self._putInstruction('Syntax error')
 
     def _delete(self, query):
+        assert query.data == 'insert_columns_and_sources'
+        print(query)
         pass
 
     def _select(self, query):
@@ -185,6 +302,7 @@ class Table:
     def __init__(self, name: str, cols=[]):
         self.name = name
         self.cols = cols
+        self.rows = []
         self.pKeys = []
         self.fKeys = []
 

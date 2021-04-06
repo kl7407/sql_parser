@@ -1,7 +1,8 @@
 create table account (
-account_number int not null,
-     branch_name char(15),
-     primary key(account_number)
+    account_number int not null,
+    branch_name char(15),
+    primary key(account_number)
 );
 
-desc account;
+insert into account  values(9732, 'Perryridge');
+delete from account where branch_name = 'Perryridge';
