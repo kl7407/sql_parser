@@ -4,5 +4,5 @@ create table account (
     primary key(account_number)
 );
 
-insert into account  values(9732, 'Perryridge');
+insert into account values(9732, 'Perryridge');
 delete from account where branch_name = 'Perryridge';

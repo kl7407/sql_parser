@@ -117,4 +117,4 @@ value_list : VALUES LP value ("," value)* RP
 value : NULL | comparable_value
 
 // DELETE
-delete_query : DELETE FROM table_name
+delete_query : DELETE FROM table_name [where_clause]

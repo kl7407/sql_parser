@@ -54,7 +54,7 @@ class DataBase:
             for query in query_list.children:
                 query_type = query.children[0].data
                 if query_type == "create_table_query":
-                    self._createTable(query.children[0])
+                    self._createTable(query)
                 elif query_type == "drop_table_query":
                     self._dropTable(query)
                 elif query_type == "desc_query":
@@ -62,7 +62,7 @@ class DataBase:
                 elif query_type == "insert_query":
                     self._insert(query)
                 elif query_type == "delete_query":
-                    print("DELETE_QUERY")
+                    self._delete(query)
                 elif query_type == "select_query":
                     print("SELECT_QUERY")
                 elif query_type == "show_table_query":
@@ -76,12 +76,13 @@ class DataBase:
         self._putInstruction("CREATE_TABLE_QUERY")
         try:
             # syntax 확인
-            assert query.data == 'create_table_query' and \
-                   query.children[0].type == 'CREATE' and query.children[1].type == 'TABLE' and \
-                   query.children[2].data == 'table_name' and query.children[3].data == 'table_element_list'
-            tableName = query.children[2].children[0].value
+            createQuery = query.children[0]
+            assert createQuery.data == 'create_table_query' and \
+                   createQuery.children[0].type == 'CREATE' and createQuery.children[1].type == 'TABLE' and \
+                   createQuery.children[2].data == 'table_name' and createQuery.children[3].data == 'table_element_list'
+            tableName = createQuery.children[2].children[0].value
             newTable = Table(tableName)
-            tableElementList = query.children[3].children
+            tableElementList = createQuery.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
             assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList)-1].type == 'RP'
             tableElementList = tableElementList[1:len(tableElementList)-1]
@@ -188,7 +189,6 @@ class DataBase:
             assert insertQuery.children[3].data == 'insert_columns_and_sources'
             tableNameTree = insertQuery.children[2]
             sourceTree = insertQuery.children[3]
-            print(sourceTree)
 
             tableName = tableNameTree.children[0].value
             table = None
@@ -231,7 +231,6 @@ class DataBase:
                                data['value'][0] in ['\'', '"']
                         data['value'] = data['value'][1:len(data['value'])-1]
                     if data['type'] == 'NULL':
-                        print('is null')
                         data['value'] = None
                     colData.append(data)
             # value 만 있을 때
@@ -287,9 +286,10 @@ class DataBase:
             self._putInstruction('Syntax error')
 
     def _delete(self, query):
-        assert query.data == 'insert_columns_and_sources'
+        self._putInstruction("DELETE_QUERY")
+        deleteQuery = query.children[0]
+        assert deleteQuery.data == 'delete_query'
         print(query)
-        pass
 
     def _select(self, query):
         pass
