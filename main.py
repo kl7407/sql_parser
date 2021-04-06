@@ -44,6 +44,30 @@ class DataBase:
     def __init__(self):
         self.tables = list()
 
+    # query.data = predicate 로 가정함.
+    def _predicate(self, query, row):
+        assert query.children[0].data == 'comparison_predicate' or query.children[0].data == 'null_predicate'
+        if query.children[0].data == 'comparison_predicate':
+            operandTree1 = query.children[0].children[0]
+            operandTree2 = query.children[0].children[2]
+            op = query.children[0].children[1]
+            assert op == '<' or op == '>' or op == '=' or op == '<=' or op == '>=' or '!='
+            if op == '<':
+                pass
+            elif op == '>':
+                pass
+            elif op == '=':
+                pass
+            elif op == '<=':
+                pass
+            elif op == '>=':
+                pass
+            else:   # op == '!='
+                pass
+            pass
+        else:
+            pass
+
     def getUserInput(self, isTest=False, testFile='input.txt'):
         userInput = " "
         while userInput[len(userInput) - 1] != ";":
@@ -286,10 +310,43 @@ class DataBase:
             self._putInstruction('Syntax error')
 
     def _delete(self, query):
-        self._putInstruction("DELETE_QUERY")
-        deleteQuery = query.children[0]
-        assert deleteQuery.data == 'delete_query'
-        print(query)
+        try:
+            self._putInstruction("DELETE_QUERY")
+            deleteQuery = query.children[0]
+            assert deleteQuery.data == 'delete_query' and deleteQuery.children[0].type == 'DELETE' and \
+                   deleteQuery.children[1].type == 'FROM' and deleteQuery.children[2].data == 'table_name'
+            assert len(deleteQuery.children) == 3 or len(deleteQuery.children) == 4
+            tableName = deleteQuery.children[2].children[0].value
+            table = None
+            for t in self.tables:
+                if t.name == tableName:
+                    table = t
+                    break
+            assert table is not None
+            # 모든 row 를 삭제할 때
+            if len(deleteQuery.children) == 3:
+                table.rows = []
+            # where 절이 있을 경우
+            elif len(deleteQuery.children) == 4:
+                tableNameTree = deleteQuery.children[2]
+                whereClauseTree = deleteQuery.children[3]
+
+                tableName = tableNameTree.children[0].value
+                table = None
+                for t in self.tables:
+                    if t.name == tableName:
+                        table = t
+                        break
+                assert table is not None
+
+                clauseElements = whereClauseTree.children
+                assert clauseElements[0].type == 'WHERE' and clauseElements[1].data == 'boolean_expr'
+                boolExpressions = clauseElements[1].children
+                for x in boolExpressions:
+                    print(x)
+                print(whereClauseTree.pretty())
+        except:
+            self._putInstruction('Syntax error')
 
     def _select(self, query):
         pass
@@ -333,6 +390,13 @@ class Table:
                     col['referredColumn'] = referredTableName + '.' + referredColName
                     break
         return isExist
+
+    def showAll(self):
+        print('name', self.name)
+        print('columns', self.cols)
+        print('rows', self.rows)
+        print('primary keys', self.pKeys)
+        print('foreign keys', self.fKeys)
 
 
 DB = DataBase()

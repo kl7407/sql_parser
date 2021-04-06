@@ -5,4 +5,5 @@ create table account (
 );
 
 insert into account values(9732, 'Perryridge');
-delete from account where branch_name = 'Perryridge';
+insert into account values(1, 'Woo');
+delete from account where (not branch_name = 'Perryridge') or branch_name = 'etc';
