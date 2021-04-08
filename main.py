@@ -12,23 +12,6 @@ def isAlphabet(letter: str):
     return letter.lower() in alphabets
 
 
-def parseParenthesis(tree: Tree):
-    tableElementList = tree.children
-    isAlright = True
-    fLen = len(tableElementList)
-    try:
-        if isinstance(tableElementList[0], Token):
-            hasLP = tableElementList[0].type == 'LP'
-            hasRP = tableElementList[fLen - 1].type == 'RP'
-            if not hasLP or not hasRP:
-                isAlright = False
-            # 괄호가 있으면 괄호 제거하고 parsing 진행.
-            tableElementList = tableElementList[1: fLen - 1]
-    except:
-        isAlright = False
-    return isAlright, tableElementList
-
-
 class DataBase:
     prompt = 'DB_2016-15827> '
 
@@ -44,29 +27,138 @@ class DataBase:
     def __init__(self):
         self.tables = list()
 
-    # query.data = predicate 로 가정함.
-    def _predicate(self, query, row):
-        assert query.children[0].data == 'comparison_predicate' or query.children[0].data == 'null_predicate'
-        if query.children[0].data == 'comparison_predicate':
-            operandTree1 = query.children[0].children[0]
-            operandTree2 = query.children[0].children[2]
-            op = query.children[0].children[1]
-            assert op == '<' or op == '>' or op == '=' or op == '<=' or op == '>=' or '!='
-            if op == '<':
-                pass
-            elif op == '>':
-                pass
-            elif op == '=':
-                pass
-            elif op == '<=':
-                pass
-            elif op == '>=':
-                pass
-            else:   # op == '!='
-                pass
-            pass
+    def _getCompValue(self, query):
+        assert query.data == 'comparable_value'
+        token = query.children[0]
+        if token.type == 'STR':
+            return {'type': 'char', 'value': token.value[1:len(token.value) - 1]}
+        elif token.type == 'INT':
+            return {'type': 'int', 'value': int(token.value)}
+        elif token.type == 'DATE':
+            return {'type': 'date', 'value': token.value}
         else:
-            pass
+            raise SyntaxError
+
+    def _getOperandValue(self, query, row):
+        assert query.data == 'comp_operand'
+        element = query.children[0]
+        if element.data == 'comparable_value':
+            return self._getCompValue(element)
+        # table name 이 있을 경우
+        elif element.data == 'table_name':
+            tableName = element.children[0].value
+            table = None
+            for t in self.tables:
+                if t.name == tableName:
+                    table = t
+                    break
+            assert table is not None
+            colWeWant = None
+            for tableCol in table.cols:
+                if tableCol['name'] == query.children[1].children[0].value:
+                    colWeWant = tableCol
+            assert colWeWant is not None
+            return {'type': colWeWant['type'], 'value': row[colWeWant['name']]}
+        # table name 이 없을 경우
+        elif element.data == 'column_name':
+            columnsWeWant = []
+            for table in self.tables:
+                for tableCol in table.cols:
+                    if tableCol['name'] == element.children[0].value:
+                        columnsWeWant.append(tableCol)
+            assert len(columnsWeWant) == 1
+            colWeWant = columnsWeWant[0]
+            return {'type': colWeWant['type'], 'value': row[colWeWant['name']]['value']}
+
+    def _predicate(self, query, row):
+        assert query.data == 'predicate'
+        if query.children[0].data == 'comparison_predicate':
+            operand1 = self._getOperandValue(query.children[0].children[0], row)
+            operand2 = self._getOperandValue(query.children[0].children[2], row)
+            op = query.children[0].children[1]
+            assert operand1['type'] == operand2['type']
+            if op == '<':
+                return operand1['value'] < operand2['value']
+            elif op == '>':
+                return operand1['value'] > operand2['value']
+            elif op == '=':
+                return operand1['value'] == operand2['value']
+            elif op == '>=':
+                return operand1['value'] >= operand2['value']
+            elif op == '<=':
+                return operand1['value'] <= operand2['value']
+            elif op == '!=':
+                return operand1['value'] != operand2['value']
+            else:
+                raise SyntaxError
+        elif query.children[0].data == 'null_predicate':
+            nullPredicateTree = query.children[0]
+            colsWeWant = []
+            # table name 이 없을 경우
+            if len(list(nullPredicateTree.find_data('table_name'))) == 0:
+                colName = nullPredicateTree.children[0].children[0].value
+                for table in self.tables:
+                    for col in table.cols:
+                        if col['name'] == colName:
+                            colsWeWant.append(col)
+            # table name 이 있을 경우.
+            else:
+                tableName = nullPredicateTree.children[0].children[0].value
+                colName = nullPredicateTree.children[1].children[0].value
+                table = None
+                for t in self.tables:
+                    if t.name == tableName:
+                        table = t
+                        break
+                assert table is not None
+                for col in table.cols:
+                    if col['name'] == colName:
+                        colsWeWant.append(col)
+                        break
+            assert len(colsWeWant) == 1
+            colWeWant = colsWeWant[0]
+            nullOperationTree = nullPredicateTree.children[1]
+            print(row[colWeWant['name']])
+            if len(nullOperationTree.children) == 3:
+                # is not null
+                return row[colWeWant['name']] is not None
+            else:
+                # is null
+                return row[colWeWant['name']] is None
+
+    def _boolExpression(self, query, row):
+        assert query.data == 'boolean_expr'
+        boolTerms = []
+        for child in query.children:
+            if isinstance(child, Tree):
+                boolTerms.append(child)
+        orVal = False
+        for term in boolTerms:
+            boolFactors = []
+            for child in term.children:
+                if isinstance(child, Tree):
+                    boolFactors.append(child)
+            andVal = True
+            for factor in boolFactors:
+                boolTest = factor.children[-1]
+                tmpTF = True
+                if boolTest.children[0].data == 'predicate':
+                    tmpTF = self._predicate(boolTest.children[0], row)
+                elif boolTest.children[0].data == 'parenthesized_boolean_expr':
+                    tmpTF = self._parenthesizedBool(boolTest.children[0], row)
+                if isinstance(factor.children[0], Token) and factor.children[0].type == 'NOT':
+                    tmpTF = not tmpTF
+                andVal = andVal and tmpTF
+            orVal = orVal or andVal
+        return orVal
+
+    def _parenthesizedBool(self, query, row):
+        boolExpression = query.children[1]
+        return self._boolExpression(boolExpression, row)
+
+    def _where(self, query, row):
+        boolExpression = query.children[1]
+        return self._boolExpression(boolExpression, row)
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
         userInput = " "
@@ -287,9 +379,8 @@ class DataBase:
                     colData.append(data)
             else:
                 raise SyntaxError
-            row = []
+            row = dict()
             for data in colData:
-                row.append(None)
                 idx = -1
                 for i in range(len(table.cols)):
                     c = table.cols[i]
@@ -304,7 +395,7 @@ class DataBase:
                     assert col['type'] == 'int' and data['type'] == 'INT' or \
                            col['type'] == 'char' and data['type'] == 'STR' or \
                            col['type'] == 'date' and data['type'] == 'DATE'
-                    row[idx] = data['value']
+                    row[col['name']] = {'type': col['type'], 'value': data['value']}
             table.rows.append(row)
         except:
             self._putInstruction('Syntax error')
@@ -328,23 +419,10 @@ class DataBase:
                 table.rows = []
             # where 절이 있을 경우
             elif len(deleteQuery.children) == 4:
-                tableNameTree = deleteQuery.children[2]
                 whereClauseTree = deleteQuery.children[3]
-
-                tableName = tableNameTree.children[0].value
-                table = None
-                for t in self.tables:
-                    if t.name == tableName:
-                        table = t
-                        break
-                assert table is not None
-
-                clauseElements = whereClauseTree.children
-                assert clauseElements[0].type == 'WHERE' and clauseElements[1].data == 'boolean_expr'
-                boolExpressions = clauseElements[1].children
-                for x in boolExpressions:
-                    print(x)
-                print(whereClauseTree.pretty())
+                # self._where(whereClauseTree, table.rows[0])
+                for row in table.rows:
+                    self._where(whereClauseTree, row)
         except:
             self._putInstruction('Syntax error')
 
@@ -393,11 +471,22 @@ class Table:
 
     def showAll(self):
         print('name', self.name)
-        print('columns', self.cols)
-        print('rows', self.rows)
+        print('----')
+        print('columns')
+        for col in self.cols:
+            print(col)
+        print('----')
+        print('rows')
+        for row in self.rows:
+            print(row)
+        print('----')
         print('primary keys', self.pKeys)
+        print('----')
         print('foreign keys', self.fKeys)
+        print('----')
 
 
 DB = DataBase()
 DB.getUserInput(True)
+for table in DB.tables:
+    table.showAll()

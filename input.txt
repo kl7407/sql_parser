@@ -1,9 +1,16 @@
 create table account (
     account_number int not null,
     branch_name char(15),
+    person_name char(20),
+    assets int,
     primary key(account_number)
 );
 
-insert into account values(9732, 'Perryridge');
-insert into account values(1, 'Woo');
-delete from account where (not branch_name = 'Perryridge') or branch_name = 'etc';
+insert into account values(9732, 'Perryridge', "Jhon" ,1000);
+insert into account values(1, 'Perryridge', 'Woo', 12000);
+insert into account values(2, 'Seoul', 'Kim', 1200);
+insert into account values(3, 'Seoul', 'Kang', 1300);
+insert into account values(4, 'Seoul', 'Song', 1400);
+insert into account values(5, null, 'Lee', 1500);
+insert into account values(6, null, 'Kim', 1600);
+delete from account where ((not branch_name = 'Perryridge') or (account.account_number is not null)) and branch_name = 'test' or branch_name = 'etc';
