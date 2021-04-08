@@ -40,7 +40,7 @@ AS : "as"i
 IS : "is"i
 OR : "or"i
 AND : "and"i
-COMP_OP : "<" | ">" | "=" | ">=" | "<=" | "!="
+COMP_OP : ">=" | "<=" | "!=" | "<" | ">" | "="
 INSERT : "insert"i
 INTO : "into"i
 VALUES : "values"i

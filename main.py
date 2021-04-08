@@ -118,13 +118,12 @@ class DataBase:
             assert len(colsWeWant) == 1
             colWeWant = colsWeWant[0]
             nullOperationTree = nullPredicateTree.children[1]
-            print(row[colWeWant['name']])
             if len(nullOperationTree.children) == 3:
                 # is not null
-                return row[colWeWant['name']] is not None
+                return row.setdefault(colWeWant['name'], {'value': None})['value'] is not None
             else:
                 # is null
-                return row[colWeWant['name']] is None
+                return row.setdefault(colWeWant['name'], {'value': None})['value'] is None
 
     def _boolExpression(self, query, row):
         assert query.data == 'boolean_expr'
@@ -278,7 +277,6 @@ class DataBase:
             if idx == -1:
                 raise SyntaxError
             self.tables.pop(idx)
-            print(self.tables)
         except:
             self._putInstruction('Syntax error')
 
@@ -420,9 +418,12 @@ class DataBase:
             # where 절이 있을 경우
             elif len(deleteQuery.children) == 4:
                 whereClauseTree = deleteQuery.children[3]
-                # self._where(whereClauseTree, table.rows[0])
+                shouldBeDeleted = []
                 for row in table.rows:
-                    self._where(whereClauseTree, row)
+                    if self._where(whereClauseTree, row):
+                        shouldBeDeleted.append(row)
+                for row in shouldBeDeleted:
+                    table.rows.remove(row)
         except:
             self._putInstruction('Syntax error')
 
