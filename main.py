@@ -179,7 +179,7 @@ class DataBase:
                 elif query_type == "delete_query":
                     self._delete(query)
                 elif query_type == "select_query":
-                    print("SELECT_QUERY")
+                    self._select(query)
                 elif query_type == "show_table_query":
                     print("SHOW_TABLE_QUERY")
                 else:
@@ -187,8 +187,11 @@ class DataBase:
         except:
             self._putInstruction('Syntax error')
 
+    '''
+    query function 여기서부터 시작.
+    '''
+
     def _createTable(self, query):
-        self._putInstruction("CREATE_TABLE_QUERY")
         try:
             # syntax 확인
             createQuery = query.children[0]
@@ -258,11 +261,11 @@ class DataBase:
                 else:
                     raise SyntaxError
             self.tables.append(newTable)
+            self._putInstruction("'CREATE TABLE' requested")
         except:
             self._putInstruction('Syntax error')
 
     def _dropTable(self, query):
-        self._putInstruction("DROP_TABLE_QUERY")
         try:
             dropTableQuery = query.children[0]
             assert dropTableQuery.data == 'drop_table_query'
@@ -277,6 +280,7 @@ class DataBase:
             if idx == -1:
                 raise SyntaxError
             self.tables.pop(idx)
+            self._putInstruction("'DROP TABLE' requested")
         except:
             self._putInstruction('Syntax error')
 
@@ -288,13 +292,13 @@ class DataBase:
             assert children[0].type == 'DESC' and children[1].data == 'table_name'
             tableName = children[1].children[0].value
             # TODO: 추후 업데이트 해야 될 영역.
+            self._putInstruction("'DESC' requested")
             return tableName
         except:
             self._putInstruction('Syntax error')
 
     def _insert(self, query):
         try:
-            self._putInstruction('INSERT_QUERY')
             insertQuery = query.children[0]
             assert insertQuery.data == 'insert_query'
             assert insertQuery.children[0].type == 'INSERT'
@@ -375,6 +379,7 @@ class DataBase:
                                data['value'][0] in ['\'', '"']
                         data['value'] = data['value'][1:len(data['value'])-1]
                     colData.append(data)
+                self._putInstruction("'INSERT' requested")
             else:
                 raise SyntaxError
             row = dict()
@@ -400,7 +405,6 @@ class DataBase:
 
     def _delete(self, query):
         try:
-            self._putInstruction("DELETE_QUERY")
             deleteQuery = query.children[0]
             assert deleteQuery.data == 'delete_query' and deleteQuery.children[0].type == 'DELETE' and \
                    deleteQuery.children[1].type == 'FROM' and deleteQuery.children[2].data == 'table_name'
@@ -424,11 +428,18 @@ class DataBase:
                         shouldBeDeleted.append(row)
                 for row in shouldBeDeleted:
                     table.rows.remove(row)
+            self._putInstruction("'DELETE' requested")
         except:
             self._putInstruction('Syntax error')
 
     def _select(self, query):
-        pass
+        try:
+            selectQuery = query.children[0]
+            assert selectQuery.data == 'select_query' and selectQuery.children[0].type == 'SELECT'
+            print(query)
+            pass
+        except:
+            self._putInstruction('Syntax error')
 
     def _showTables(self, query):
         pass
@@ -489,5 +500,7 @@ class Table:
 
 DB = DataBase()
 DB.getUserInput(True)
+'''
 for table in DB.tables:
     table.showAll()
+'''

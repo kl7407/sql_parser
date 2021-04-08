@@ -15,3 +15,4 @@ insert into account values(4, 'Seoul', 'Song', 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul', null, 1600);
 delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
+select * from account;
