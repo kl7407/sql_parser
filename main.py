@@ -452,8 +452,7 @@ class DataBase:
                 for asInfo in asInfos:
                     # 가명인 IDENTIFIER 가 있으면 value 바꿔줌.
                     if tableNameTree.children[0].value == asInfo['alias']:
-                        tableNameTree.children[0].value = asInfo['originalName']
-            print(tableNameTrees)
+                        tableNameTree.children[0] = tableNameTree.children[0].update(value=asInfo['originalName'])
             pass
         try:
             selectQuery = query.children[0]
