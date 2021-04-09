@@ -7,12 +7,12 @@ create table account (
 );
 insert into account values(9732, 'Perryridge', "Jhon" ,1000);
 insert into account values(1, 'Perryridge', 'Woo', 12000);
-insert into account values(1, 'Perryridge', null, 1000);
-insert into account values(1, 'Perryridge', null, 1200);
+insert into account values(10, 'Perryridge', null, 1000);
+insert into account values(11, 'Perryridge', null, 1200);
 insert into account values(2, 'Seoul', 'Kim', 1200);
 insert into account values(3, 'Seoul', 'Kang', 1300);
 insert into account values(4, 'Seoul', 'Song', 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul', null, 1600);
 delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
-select * from account;
+select account_number, branch_name from account, person as student where account_number < 10;

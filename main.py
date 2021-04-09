@@ -433,10 +433,45 @@ class DataBase:
             self._putInstruction('Syntax error')
 
     def _select(self, query):
+        # as 가 있으면 없에주는 함수
+        def dealWithAs(inputQ):
+            asInfos = []
+            # 먼저 테이블 이름 가명을 없엠.
+            referredTables = list(inputQ.find_data('referred_table'))
+            for referred in referredTables:
+                if len(referred.children) == 3:
+                    originalName = referred.children[0].children[0].value
+                    alias = referred.children[2].children[0].value
+                    asInfos.append({'originalName': originalName, 'alias': alias})
+            for i in range(len(asInfos)):
+                for j in range(i+1, len(asInfos)):
+                    if asInfos[i]['alias'] == asInfos[j]['alias']:
+                        raise SyntaxError
+            tableNameTrees = list(inputQ.find_data('table_name'))
+            for tableNameTree in tableNameTrees:
+                for asInfo in asInfos:
+                    # 가명인 IDENTIFIER 가 있으면 value 바꿔줌.
+                    if tableNameTree.children[0].value == asInfo['alias']:
+                        tableNameTree.children[0].value = asInfo['originalName']
+            print(tableNameTrees)
+            pass
         try:
             selectQuery = query.children[0]
             assert selectQuery.data == 'select_query' and selectQuery.children[0].type == 'SELECT'
-            print(query)
+            dealWithAs(selectQuery)
+            selectList = selectQuery.children[1].children
+            selectedCols = []
+            tableExpressionTree = selectQuery.children[2]
+            fromClause = list(tableExpressionTree.find_data('from_clause'))[0]
+            whereClauses = list(tableExpressionTree.find_data('where_clause'))
+            tableReferenceList = list(fromClause.children[1].find_data('referred_table'))
+            for x in tableReferenceList:
+                print(x)
+            # print(tableReferenceList)
+            if len(whereClauses) == 0:
+                pass
+            else:
+                pass
             pass
         except:
             self._putInstruction('Syntax error')
