@@ -5,6 +5,11 @@ class Column:
         self.isNotNull = isNotNull
         self.maxLen = maxLen
 
+    def copy(self, name: str):
+        if name is None:
+            name = self.name
+        return Column(self.dataType, name, self.maxLen, self.isNotNull)
+
 
 class Table:
     def __init__(self, name: str):
@@ -13,6 +18,7 @@ class Table:
         self.rows = []
         self.pKeys = []
         self.fKeys = []
+        self.originalTables = []
 
     def addCol(self, col: Column):
         # 기존 column 과 중복된 이름은 받지 않음.
@@ -65,3 +71,19 @@ class Table:
             row[col.name] = value
         self.rows.append(row)
 
+    def addOriginalTable(self, table):
+        if len(table.originalTables) == 0:
+            self.originalTables.append(table)
+        else:
+            for originalTable in table.originalTables:
+                self.originalTables.append(originalTable)
+
+    def copy(self, alias):
+        if alias is None:
+            alias = self.name
+        newTable = Table(alias)
+        newTable.cols = self.cols
+        newTable.rows = self.rows
+        newTable.pKeys = self.pKeys
+        newTable.fKeys = self.fKeys
+        return newTable

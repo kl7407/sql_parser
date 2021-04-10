@@ -14,6 +14,7 @@ create table account (
     foreign key(person_name) references person(person_name)
 );
 insert into person values(1, 'Jhon', "M");
+insert into person values(2, 'Woo', "M");
 insert into account values(9732, 'Perryridge', "Jhon" ,1000);
 insert into account values(1, 'Perryridge', 'Woo', 12000);
 insert into account values(10, 'Perryridge', null, 1000);
@@ -24,4 +25,7 @@ insert into account values(4, 'Seoul', 'Song', 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul', null, 1600);
 delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
-select account_number, branch_name from account, person as student where person.account_number < 10;
+select account_number as ac_num, branch_name as b_na, student.person_name as student_name
+    from account, person as student, person
+    where person.account_number < 10 or person.asset = student.asset;
+show tables;

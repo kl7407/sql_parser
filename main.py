@@ -28,6 +28,12 @@ class DataBase:
     def __init__(self):
         self.tables = list()
 
+    def getTable(self, tableName):
+        for table in self.tables:
+            if table.name == tableName:
+                return table
+        return None
+
     def _getCompValue(self, query):
         assert query.data == 'comparable_value'
         token = query.children[0]
@@ -187,7 +193,7 @@ class DataBase:
                 elif query_type == "select_query":
                     self._select(query)
                 elif query_type == "show_table_query":
-                    print("SHOW_TABLE_QUERY")
+                    self._showTables(query)
                 else:
                     raise SyntaxError
         except:
@@ -270,8 +276,10 @@ class DataBase:
                     raise SyntaxError
             self.tables.append(newTable)
             self._putInstruction("'CREATE TABLE' requested")
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
 
     def _dropTable(self, query):
         try:
@@ -289,8 +297,10 @@ class DataBase:
                 raise SyntaxError
             self.tables.pop(idx)
             self._putInstruction("'DROP TABLE' requested")
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
 
     def _desc(self, query):
         try:
@@ -298,11 +308,12 @@ class DataBase:
             children = descQuery.children
             assert descQuery.data == 'desc_query'
             assert children[0].type == 'DESC' and children[1].data == 'table_name'
-            tableName = children[1].children[0].value
+            # tableName = children[1].children[0].value
             self._putInstruction("'DESC' requested")
-            return tableName
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
 
     def _insert(self, query):
         try:
@@ -410,8 +421,10 @@ class DataBase:
                     row[col.name] = {'type': col.dataType, 'value': data['value']}
             table.addRow(row)
             self._putInstruction("'INSERT' requested")
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
 
     def _delete(self, query):
         try:
@@ -439,36 +452,113 @@ class DataBase:
                 for row in shouldBeDeleted:
                     table.rows.remove(row)
             self._putInstruction("'DELETE' requested")
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
+
+    def _join_helper(self, table1: Table, table2: Table, tableName: str):
+        def isIn(colName, t):
+            for col in t.cols:
+                if col.name.split('.')[-1] == colName and len(colName.split('.')) == 1:
+                    return True
+            return False
+
+        def getTableName(table, colName):
+            originalTable = None
+            for oTable in table.originalTables:
+                found = False
+                for oCol in oTable.cols:
+                    if oCol.name == colName:
+                        originalTable = oTable
+                        found = True
+                        break
+                if found:
+                    break
+            assert originalTable is not None
+            return '{}.{}'.format(originalTable.name, colName)
+        """
+        테이블 가명은 이미 다 적용된 상태.
+
+        :param asInfo: [{ 'tableName': str, 'colName': str, 'newName': str}, ...]
+        :return: Table
+        """
+        if tableName is None:
+            tableName = 'joined_{}_{}'.format(table1.name, table2.name)
+        newTable = Table(tableName)
+        # table1, table2 에 같은 이름의 column이 있으면 앞에 테이블 이름 추가해서 넣어줌.
+        for col in table1.cols:
+            colName = col.name
+            if isIn(colName, table2):
+                if len(table1.originalTables) == 0:
+                    colName = '{}.{}'.format(table1.name, colName)
+                else:
+                    colName = getTableName(table1, colName)
+            newTable.addCol(col.copy(colName))
+        for col in table2.cols:
+            colName = col.name
+            if isIn(colName, table1):
+                if len(table2.originalTables) == 0:
+                    colName = '{}.{}'.format(table2.name, colName)
+                else:
+                    colName = getTableName(table2, colName)
+            newTable.addCol(col.copy(colName))
+
+        # 새 테이블에 row 넣어줌.
+        for i1 in range(len(table1.rows)):
+            row1 = table1.rows[i1]
+            for i2 in range(len(table2.rows)):
+                row2 = table2.rows[i2]
+                newRow = dict()
+                for row1Key in row1:
+                    if isIn(row1Key, table2):
+                        if len(table1.originalTables) == 0:
+                            newRow[table1.name + '.' + row1Key] = row1[row1Key]
+                        else:
+                            newRow[getTableName(table1, row1Key)] = row1[row1Key]
+                    else:
+                        newRow[row1Key] = row1[row1Key]
+                for row2Key in row2:
+                    if isIn(row2Key, table1):
+                        if len(table2.originalTables) == 0:
+                            newRow[table2.name + '.' + row2Key] = row2[row2Key]
+                        else:
+                            newRow[getTableName(table2, row2Key)] = row2[row2Key]
+                    else:
+                        newRow[row2Key] = row2[row2Key]
+                newTable.rows.append(newRow)
+        newTable.addOriginalTable(table1)
+        newTable.addOriginalTable(table2)
+
+        return newTable
+
+    def _select_helper(self, table: Table, whereClause, asInfo):
+        pass
 
     def _select(self, query):
-        # as 가 있으면 없에주는 함수
-        def dealWithAs(inputQ):
-            asInfos = []
-            # 먼저 테이블 이름 가명을 없엠.
-            referredTables = list(inputQ.find_data('referred_table'))
-            for referred in referredTables:
+        def getTableList(inputQ):
+            # select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
+            referredTables = []
+            referredTableTrees = list(inputQ.find_data('referred_table'))
+            for referred in referredTableTrees:
+                tableName = referred.children[0].children[0].value
+                table = self.getTable(tableName)
                 if len(referred.children) == 3:
-                    originalName = referred.children[0].children[0].value
                     alias = referred.children[2].children[0].value
-                    asInfos.append({'originalName': originalName, 'alias': alias})
-            for i in range(len(asInfos)):
-                for j in range(i+1, len(asInfos)):
-                    if asInfos[i]['alias'] == asInfos[j]['alias']:
-                        raise SyntaxError
-            tableNameTrees = list(inputQ.find_data('table_name'))
-            for tableNameTree in tableNameTrees:
-                for asInfo in asInfos:
-                    # 가명인 IDENTIFIER 가 있으면 value 바꿔줌.
-                    if tableNameTree.children[0].value == asInfo['alias']:
-                        tableNameTree.children[0] = tableNameTree.children[0].update(value=asInfo['originalName'])
-            # column 가명 없에기
-            print(inputQ.pretty())
+                    table = table.copy(alias)
+                referredTables.append(table)
+            return referredTables
         try:
             selectQuery = query.children[0]
             assert selectQuery.data == 'select_query' and selectQuery.children[0].type == 'SELECT'
-            dealWithAs(selectQuery)
+            tableList = getTableList(selectQuery)
+            assert len(tableList) > 0
+
+            tableWeWant = tableList[0]
+            for i in range(1, len(tableList)):
+                tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
+
+
             selectList = selectQuery.children[1].children
             selectedCols = []
             tableExpressionTree = selectQuery.children[2]
@@ -480,11 +570,19 @@ class DataBase:
             else:
                 pass
             pass
+            return True
         except:
             self._putInstruction('Syntax error')
+            return False
 
     def _showTables(self, query):
-        pass
+        try:
+            showTableQuery = query.children[0]
+            assert showTableQuery.children[0] == 'SHOW' and showTableQuery.children[1] == 'TABLES'
+            return True
+        except:
+            self._putInstruction('Syntax error')
+            return False
 
 
 DB = DataBase()
