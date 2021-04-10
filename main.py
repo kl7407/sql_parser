@@ -199,7 +199,7 @@ class DataBase:
                    createQuery.children[0].type == 'CREATE' and createQuery.children[1].type == 'TABLE' and \
                    createQuery.children[2].data == 'table_name' and createQuery.children[3].data == 'table_element_list'
             tableName = createQuery.children[2].children[0].value
-            newTable = Table(tableName)
+            newTable = Table(tableName, [])
             tableElementList = createQuery.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
             assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList)-1].type == 'RP'
@@ -240,6 +240,7 @@ class DataBase:
                         assert children[0].type == 'PRIMARY' and children[1].type == 'KEY'
                         assert children[2].data == 'column_name_list'
                         colNameList = children[2].children
+                        # 괄호 제거
                         assert colNameList[0].type == 'LP' and colNameList[len(colNameList)-1].type == 'RP'
                         colNameList = colNameList[1:len(colNameList)-1]
                         for colNameTree in colNameList:
@@ -249,15 +250,18 @@ class DataBase:
                     elif constraintTypeTree.data == 'referential_constraint':
                         children = constraintTypeTree.children
                         assert children[0].type == 'FOREIGN' and children[1].type == 'KEY'
-                        assert children[2].data == 'column_name'
-                        colNameTree = children[2]
-                        colName = colNameTree.children[0].value
+                        assert children[2].data == 'column_name_list'
+                        colNameListTree = children[2]
+                        colNameList = colNameListTree.children[1].children
                         assert children[3].type == 'REFERENCES' and children[4].data == 'table_name' and \
                                children[5].data == 'column_name_list'
-                        assert children[5].children[0].type == 'LP' and children[5].children[2].type == 'RP'
                         referredTableName = children[4].children[0].value
-                        referredColName = children[5].children[2].value
-                        newTable.setForeignKey(colName, referredTableName, referredColName)
+                        referredColNameTreeList = children[5].children[1: len(children[5].children) - 1]  # 괄호 제거
+                        for i in range(len(colNameList)):
+                            colNameTree = colNameList[i]
+                            colName = colNameTree.value
+                            referredColName = referredColNameTreeList[i].children[0].value
+                            newTable.setForeignKey(colName, referredTableName, referredColName)
                 else:
                     raise SyntaxError
             self.tables.append(newTable)
@@ -291,7 +295,6 @@ class DataBase:
             assert descQuery.data == 'desc_query'
             assert children[0].type == 'DESC' and children[1].data == 'table_name'
             tableName = children[1].children[0].value
-            # TODO: 추후 업데이트 해야 될 영역.
             self._putInstruction("'DESC' requested")
             return tableName
         except:
@@ -453,7 +456,8 @@ class DataBase:
                     # 가명인 IDENTIFIER 가 있으면 value 바꿔줌.
                     if tableNameTree.children[0].value == asInfo['alias']:
                         tableNameTree.children[0] = tableNameTree.children[0].update(value=asInfo['originalName'])
-            pass
+            # column 가명 없에기
+            print(inputQ.pretty())
         try:
             selectQuery = query.children[0]
             assert selectQuery.data == 'select_query' and selectQuery.children[0].type == 'SELECT'
@@ -464,9 +468,6 @@ class DataBase:
             fromClause = list(tableExpressionTree.find_data('from_clause'))[0]
             whereClauses = list(tableExpressionTree.find_data('where_clause'))
             tableReferenceList = list(fromClause.children[1].find_data('referred_table'))
-            for x in tableReferenceList:
-                print(x)
-            # print(tableReferenceList)
             if len(whereClauses) == 0:
                 pass
             else:
@@ -508,6 +509,7 @@ class Table:
 
     def setForeignKey(self, colName, referredTableName: str, referredColName: str):
         isExist = self._addKey(self.fKeys, colName)
+        # 성공적으로 fKey 에 집어넣었을 경우 어떤 foreign column 인지 저장.
         if isExist == 1:
             for col in self.cols:
                 if col['name'] == colName:
