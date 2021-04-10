@@ -1,4 +1,5 @@
 from lark import *
+from Table import *
 
 with open('grammar.lark') as file:
     fileInfo = file.read()
@@ -39,14 +40,17 @@ class DataBase:
         else:
             raise SyntaxError
 
-    def _getOperandValue(self, query, row):
+    def _getOperandValue(self, query, row, tableName=None):
         assert query.data == 'comp_operand'
         element = query.children[0]
         if element.data == 'comparable_value':
             return self._getCompValue(element)
         # table name 이 있을 경우
-        elif element.data == 'table_name':
-            tableName = element.children[0].value
+        elif element.data == 'table_name' or tableName is not None:
+            colName = element.children[0].value
+            if element.data == 'table_name':
+                tableName = element.children[0].value
+                colName = query.children[1].children[0].value
             table = None
             for t in self.tables:
                 if t.name == tableName:
@@ -55,26 +59,26 @@ class DataBase:
             assert table is not None
             colWeWant = None
             for tableCol in table.cols:
-                if tableCol['name'] == query.children[1].children[0].value:
+                if tableCol.name == colName:
                     colWeWant = tableCol
             assert colWeWant is not None
-            return {'type': colWeWant['type'], 'value': row[colWeWant['name']]}
+            return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
         # table name 이 없을 경우
         elif element.data == 'column_name':
             columnsWeWant = []
             for table in self.tables:
                 for tableCol in table.cols:
-                    if tableCol['name'] == element.children[0].value:
+                    if tableCol.name == element.children[0].value:
                         columnsWeWant.append(tableCol)
             assert len(columnsWeWant) == 1
             colWeWant = columnsWeWant[0]
-            return {'type': colWeWant['type'], 'value': row[colWeWant['name']]['value']}
+            return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
 
-    def _predicate(self, query, row):
+    def _predicate(self, query, row, tableName=None):
         assert query.data == 'predicate'
         if query.children[0].data == 'comparison_predicate':
-            operand1 = self._getOperandValue(query.children[0].children[0], row)
-            operand2 = self._getOperandValue(query.children[0].children[2], row)
+            operand1 = self._getOperandValue(query.children[0].children[0], row, tableName)
+            operand2 = self._getOperandValue(query.children[0].children[2], row, tableName)
             op = query.children[0].children[1]
             assert operand1['type'] == operand2['type']
             if op == '<':
@@ -95,16 +99,18 @@ class DataBase:
             nullPredicateTree = query.children[0]
             colsWeWant = []
             # table name 이 없을 경우
-            if len(list(nullPredicateTree.find_data('table_name'))) == 0:
+            if len(list(nullPredicateTree.find_data('table_name'))) == 0 and tableName is None:
                 colName = nullPredicateTree.children[0].children[0].value
                 for table in self.tables:
                     for col in table.cols:
-                        if col['name'] == colName:
+                        if col.name == colName:
                             colsWeWant.append(col)
             # table name 이 있을 경우.
             else:
-                tableName = nullPredicateTree.children[0].children[0].value
-                colName = nullPredicateTree.children[1].children[0].value
+                colName = nullPredicateTree.children[0].children[0].value
+                if tableName is None:
+                    tableName = nullPredicateTree.children[0].children[0].value
+                    colName = nullPredicateTree.children[1].children[0].value
                 table = None
                 for t in self.tables:
                     if t.name == tableName:
@@ -112,7 +118,7 @@ class DataBase:
                         break
                 assert table is not None
                 for col in table.cols:
-                    if col['name'] == colName:
+                    if col.name == colName:
                         colsWeWant.append(col)
                         break
             assert len(colsWeWant) == 1
@@ -120,12 +126,12 @@ class DataBase:
             nullOperationTree = nullPredicateTree.children[1]
             if len(nullOperationTree.children) == 3:
                 # is not null
-                return row.setdefault(colWeWant['name'], {'value': None})['value'] is not None
+                return row.setdefault(colWeWant.name, None) is not None
             else:
                 # is null
-                return row.setdefault(colWeWant['name'], {'value': None})['value'] is None
+                return row.setdefault(colWeWant.name, None) is None
 
-    def _boolExpression(self, query, row):
+    def _boolExpression(self, query, row, tableName):
         assert query.data == 'boolean_expr'
         boolTerms = []
         for child in query.children:
@@ -142,22 +148,22 @@ class DataBase:
                 boolTest = factor.children[-1]
                 tmpTF = True
                 if boolTest.children[0].data == 'predicate':
-                    tmpTF = self._predicate(boolTest.children[0], row)
+                    tmpTF = self._predicate(boolTest.children[0], row, tableName)
                 elif boolTest.children[0].data == 'parenthesized_boolean_expr':
-                    tmpTF = self._parenthesizedBool(boolTest.children[0], row)
+                    tmpTF = self._parenthesizedBool(boolTest.children[0], row, tableName)
                 if isinstance(factor.children[0], Token) and factor.children[0].type == 'NOT':
                     tmpTF = not tmpTF
                 andVal = andVal and tmpTF
             orVal = orVal or andVal
         return orVal
 
-    def _parenthesizedBool(self, query, row):
+    def _parenthesizedBool(self, query, row, tableName):
         boolExpression = query.children[1]
-        return self._boolExpression(boolExpression, row)
+        return self._boolExpression(boolExpression, row, tableName)
 
-    def _where(self, query, row):
+    def _where(self, query, row, tableName=None):
         boolExpression = query.children[1]
-        return self._boolExpression(boolExpression, row)
+        return self._boolExpression(boolExpression, row, tableName)
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
         userInput = " "
@@ -199,12 +205,11 @@ class DataBase:
                    createQuery.children[0].type == 'CREATE' and createQuery.children[1].type == 'TABLE' and \
                    createQuery.children[2].data == 'table_name' and createQuery.children[3].data == 'table_element_list'
             tableName = createQuery.children[2].children[0].value
-            newTable = Table(tableName, [])
+            newTable = Table(tableName)
             tableElementList = createQuery.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
             assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList)-1].type == 'RP'
             tableElementList = tableElementList[1:len(tableElementList)-1]
-
             for elementTree in tableElementList:
                 # syntax 확인
                 assert elementTree.data == 'table_element'
@@ -220,17 +225,16 @@ class DataBase:
                         isNotNull = True
                     columnNameTree = elementTree.children[0].children[0]
                     columnTypeTree = elementTree.children[0].children[1]
-                    columnInfo = dict()
-                    columnInfo['name'] = columnNameTree.children[0].value
-                    columnInfo['type'] = columnTypeTree.children[0].value
-                    columnInfo['notNull'] = isNotNull
+                    columnName = columnNameTree.children[0].value
+                    columnDataType = columnTypeTree.children[0].value
+                    columnMaxLen = 1000
                     # 길이 정보가 있을 경우 추가해줌.
                     if len(columnTypeTree.children) != 1:
                         tokens = columnTypeTree.children
                         if tokens[1].type != 'LP' or tokens[3].type != 'RP' or tokens[2].type != 'INT':
                             raise SyntaxError
-                        columnInfo['maxLength'] = int(tokens[2].value)
-                    newTable.addCol(columnInfo)
+                        columnMaxLen = int(tokens[2].value)
+                    newTable.addCol(Column(columnDataType, columnName, columnMaxLen, isNotNull))
 
                 elif elementTree.children[0].data == 'table_constraint_definition':
                     constraintTree = elementTree.children[0]
@@ -246,7 +250,7 @@ class DataBase:
                         for colNameTree in colNameList:
                             assert colNameTree.data == 'column_name'
                             colName = colNameTree.children[0].value
-                            assert newTable.setPrimaryKey(colName) == 1
+                            newTable.setPrimaryKey(colName)
                     elif constraintTypeTree.data == 'referential_constraint':
                         children = constraintTypeTree.children
                         assert children[0].type == 'FOREIGN' and children[1].type == 'KEY'
@@ -347,7 +351,7 @@ class DataBase:
                     if data['type'] == 'INT':
                         data['value'] = int(data['value'])
                     if data['type'] == 'STR':
-                        # string 일 경우 따옴표 체크
+                        # string 일 경우 따옴표 없에줌.
                         assert data['value'][0] == data['value'][len(data['value'][0])-1] and \
                                data['value'][0] in ['\'', '"']
                         data['value'] = data['value'][1:len(data['value'])-1]
@@ -366,7 +370,7 @@ class DataBase:
                     valTree = valTreeList[i]
                     assert valTree.data == 'value'
                     data = dict()
-                    data['column_name'] = table.cols[i]['name']
+                    data['column_name'] = table.cols[i].name
                     if isinstance(valTree.children[0], Tree):
                         data['type'] = valTree.children[0].children[0].type
                         data['value'] = valTree.children[0].children[0].value
@@ -377,12 +381,13 @@ class DataBase:
                     if data['type'] == 'INT':
                         data['value'] = int(data['value'])
                     if data['type'] == 'STR':
-                        # string 일 경우 따옴표 체크
-                        assert data['value'][0] == data['value'][len(data['value'][0])-1] and \
+                        # string 일 경우 따옴표 없에줌.
+                        assert data['value'][0] == data['value'][len(data['value'][0]) - 1] and \
                                data['value'][0] in ['\'', '"']
-                        data['value'] = data['value'][1:len(data['value'])-1]
+                        data['value'] = data['value'][1:len(data['value']) - 1]
+                    if data['type'] == 'NULL':
+                        data['value'] = None
                     colData.append(data)
-                self._putInstruction("'INSERT' requested")
             else:
                 raise SyntaxError
             row = dict()
@@ -390,19 +395,21 @@ class DataBase:
                 idx = -1
                 for i in range(len(table.cols)):
                     c = table.cols[i]
-                    if c['name'] == data['column_name']:
+                    if c.name == data['column_name']:
                         idx = i
                         break
                 assert idx != -1
                 col = table.cols[idx]
                 if data['type'] == 'NULL':
-                    assert not col['notNull']
+                    assert not col.isNotNull
+                    row[col.name] = {'type': col.dataType, 'value': None}
                 else:
-                    assert col['type'] == 'int' and data['type'] == 'INT' or \
-                           col['type'] == 'char' and data['type'] == 'STR' or \
-                           col['type'] == 'date' and data['type'] == 'DATE'
-                    row[col['name']] = {'type': col['type'], 'value': data['value']}
-            table.rows.append(row)
+                    assert col.dataType == 'int' and data['type'] == 'INT' or \
+                           col.dataType == 'char' and data['type'] == 'STR' or \
+                           col.dataType == 'date' and data['type'] == 'DATE'
+                    row[col.name] = {'type': col.dataType, 'value': data['value']}
+            table.addRow(row)
+            self._putInstruction("'INSERT' requested")
         except:
             self._putInstruction('Syntax error')
 
@@ -427,7 +434,7 @@ class DataBase:
                 whereClauseTree = deleteQuery.children[3]
                 shouldBeDeleted = []
                 for row in table.rows:
-                    if self._where(whereClauseTree, row):
+                    if self._where(whereClauseTree, row, tableName):
                         shouldBeDeleted.append(row)
                 for row in shouldBeDeleted:
                     table.rows.remove(row)
@@ -480,63 +487,5 @@ class DataBase:
         pass
 
 
-class Table:
-    def __init__(self, name: str, cols=[]):
-        self.name = name
-        self.cols = cols
-        self.rows = []
-        self.pKeys = []
-        self.fKeys = []
-
-    def addCol(self, col: dict):
-        self.cols.append(col)
-
-    def _addKey(self, keyList: list, colName):
-        if colName not in keyList:
-            isExist = False
-            for col in self.cols:
-                if col['name'] == colName:
-                    isExist = True
-                    break
-            if isExist:
-                keyList.append(colName)
-                return 1
-            return 0
-        return 1
-
-    def setPrimaryKey(self, colName):
-        return self._addKey(self.pKeys, colName)
-
-    def setForeignKey(self, colName, referredTableName: str, referredColName: str):
-        isExist = self._addKey(self.fKeys, colName)
-        # 성공적으로 fKey 에 집어넣었을 경우 어떤 foreign column 인지 저장.
-        if isExist == 1:
-            for col in self.cols:
-                if col['name'] == colName:
-                    col['referredColumn'] = referredTableName + '.' + referredColName
-                    break
-        return isExist
-
-    def showAll(self):
-        print('name', self.name)
-        print('----')
-        print('columns')
-        for col in self.cols:
-            print(col)
-        print('----')
-        print('rows')
-        for row in self.rows:
-            print(row)
-        print('----')
-        print('primary keys', self.pKeys)
-        print('----')
-        print('foreign keys', self.fKeys)
-        print('----')
-
-
 DB = DataBase()
 DB.getUserInput(True)
-'''
-for table in DB.tables:
-    table.showAll()
-'''
