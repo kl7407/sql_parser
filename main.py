@@ -55,8 +55,12 @@ class DataBase:
         elif element.data == 'table_name' or tableName is not None:
             colName = element.children[0].value
             if element.data == 'table_name':
-                tableName = element.children[0].value
-                colName = query.children[1].children[0].value
+                if tableName is None:
+                    tableName = element.children[0].value
+                    colName = query.children[1].children[0].value
+                else:
+                    # select 에서 사용될 때이므로 원래 table 명을 column name 에 붙여줌
+                    colName = element.children[0].value + '.' + query.children[1].children[0].value
             table = None
             for t in self.tables:
                 if t.name == tableName:
@@ -67,6 +71,12 @@ class DataBase:
             for tableCol in table.cols:
                 if tableCol.name == colName:
                     colWeWant = tableCol
+            if colWeWant is None:
+                colName = table.findColName(colName)
+                originalName = colName.split('.')[-1]
+                for tableCol in table.cols:
+                    if tableCol.name == originalName:
+                        colWeWant = tableCol
             assert colWeWant is not None
             return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
         # table name 이 없을 경우
@@ -557,19 +567,47 @@ class DataBase:
             tableWeWant = tableList[0]
             for i in range(1, len(tableList)):
                 tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
-
+            # where 절 처리를 위해 잠시 tables 에 넣어줌
+            self.tables.append(tableWeWant)
 
             selectList = selectQuery.children[1].children
-            selectedCols = []
+            selectedColNames = []
+            for colTree in selectList:
+                nameElements = colTree.children
+                if nameElements[0].data == 'column_name':
+                    originalName = nameElements[0].children[0].value
+                    if len(nameElements) != 1:
+                        newName = nameElements[2].children[0].value
+                        tableWeWant.changeColName(originalName, newName)
+                        selectedColNames.append(newName)
+                    else:
+                        selectedColNames.append(originalName)
+                elif nameElements[0].data == 'table_name':
+                    tableName = nameElements[0].children[0].value
+                    originalName = nameElements[1].children[0].value
+                    if len(nameElements) != 2:
+                        newName = nameElements[3].children[0].value
+                        # tableWhatWeWant 에 tableName.colName 형태로 안 저장되어 있을수도 있으므로 한 번 더 체크함.
+                        if not tableWeWant.changeColName(tableName+'.'+originalName, newName):
+                            tableWeWant.changeColName(originalName, newName)
+                        selectedColNames.append(newName)
+                    else:
+                        selectedColNames.append(tableName+'.'+originalName)
+                else:
+                    raise SyntaxError
+
             tableExpressionTree = selectQuery.children[2]
-            fromClause = list(tableExpressionTree.find_data('from_clause'))[0]
             whereClauses = list(tableExpressionTree.find_data('where_clause'))
-            tableReferenceList = list(fromClause.children[1].find_data('referred_table'))
+            rowsWeWant = []
             if len(whereClauses) == 0:
-                pass
+                # where 조건이 없으면 전체를  output 으로 내보냄
+                for row in tableWeWant.rows:
+                    rowsWeWant.append(row)
             else:
-                pass
-            pass
+                whereClause = whereClauses[0]
+                for row in tableWeWant.rows:
+                    if self._where(whereClause, row, tableWeWant.name):
+                        rowsWeWant.append(row)
             return True
         except:
             self._putInstruction('Syntax error')
@@ -578,7 +616,7 @@ class DataBase:
     def _showTables(self, query):
         try:
             showTableQuery = query.children[0]
-            assert showTableQuery.children[0] == 'SHOW' and showTableQuery.children[1] == 'TABLES'
+            assert showTableQuery.children[0].type == 'SHOW' and showTableQuery.children[1].type == 'TABLES'
             return True
         except:
             self._putInstruction('Syntax error')
