@@ -19,6 +19,7 @@ class Table:
         self.pKeys = []
         self.fKeys = []
         self.originalTables = []
+        self.originalColNames = []
 
     def addCol(self, col: Column):
         # 기존 column 과 중복된 이름은 받지 않음.
@@ -87,3 +88,50 @@ class Table:
         newTable.pKeys = self.pKeys
         newTable.fKeys = self.fKeys
         return newTable
+
+    def changeColName(self, originalName, newName):
+        for i in range(len(self.cols)):
+            col = self.cols[i]
+            if col.name == originalName:
+                # 먼저 다른 컬럼이랑 이름이 중복되지 않아야 함.
+                for j in range(len(self.cols)):
+                    if i == j:
+                        continue
+                    elif newName == self.cols[j].name:
+                        return False
+                col.name = newName
+                self.originalColNames.append({'originalName': originalName, 'newName': newName})
+                for row in self.rows:
+                    row[newName] = row[originalName]
+                    del row[originalName]
+                return True
+        return False
+
+    def _getNewName(self, originalName):
+        for history in self.originalColNames:
+            if history['originalName'] == originalName:
+                return history['newName']
+        return None
+
+    # as 때문에 col 이름이 바뀌었을 때 해당 항목을 찾아주는.
+    def findColName(self, colName):
+        output = colName
+        isIn = False
+        while not isIn:
+            assert output is not None
+            for col in self.cols:
+                if col.name == output:
+                    return col.name
+            if not isIn:
+                nextValue = self._getNewName(output)
+                if nextValue is None:
+                    splited = output.split('.')
+                    for col in self.cols:
+                        if col.name == splited[-1]:
+                            return col.name
+
+                    if len(splited) != 1:
+                        nextValue = self._getNewName(splited[-1])
+                output = nextValue
+        return output
+

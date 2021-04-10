@@ -27,5 +27,5 @@ insert into account values(6, 'Seoul', null, 1600);
 delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
 select account_number as ac_num, branch_name as b_na, student.person_name as student_name
     from account, person as student, person
-    where person.account_number < 10 or person.asset = student.asset;
+    where account.account_number < 10 or person.assets = student.assets;
 show tables;
