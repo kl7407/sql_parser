@@ -57,6 +57,7 @@ query : create_table_query
       | insert_query
       | delete_query
       | show_table_query
+      | EXIT
 
 
 // CREATE TABLE
