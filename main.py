@@ -1,5 +1,7 @@
+import os
 from lark import *
 from Table import *
+from bsddb3 import db
 
 with open('grammar.lark') as file:
     fileInfo = file.read()
@@ -27,6 +29,35 @@ class DataBase:
 
     def __init__(self):
         self.tables = list()
+        dbList = os.listdir('./database')
+        # 기존에 존재하는 DB가 있으면 넣어줌.
+        for dbFileName in dbList:
+            parsedName = dbFileName.split('.')[0]
+            newTable = Table(parsedName)
+
+            colInfoRaw = str(newTable.db.get(b'cols'))[3:-2]
+            if len(colInfoRaw) != 0:
+                for info in colInfoRaw.split(', '):
+                    parsedInfo = info.split('/')
+                    newCol = Column(parsedInfo[0], parsedInfo[1], int(parsedInfo[2]), parsedInfo[3] == 'True')
+                    newTable.addCol(newCol)
+
+            pKeyInfoRaw = str(newTable.db.get(b'pKeys'))[3:-2]
+            if len(pKeyInfoRaw) != 0:
+                newTable.setPrimaryKey(pKeyInfoRaw.split('/')[1])
+
+            # fKey 같은 경우엔 dict 로 저장해서 그대로 넣어줘도 됨.
+            fKeyInfo = eval(str(newTable.db.get(b'fKeys'))[1:])
+            newTable.fKeys = fKeyInfo
+
+            # row 넣어주기
+            cursor = newTable.db.cursor()
+            while x := cursor.next():
+                if x[0] in [b'cols', b'pKeys', b'fKeys']:
+                    continue
+                else:
+                    newTable.rows.append(eval(str(x[1])[2:-1]))
+            self.tables.append(newTable)
 
     def getTable(self, tableName):
         for table in self.tables:
@@ -185,6 +216,7 @@ class DataBase:
         userInput = " "
         while userInput[len(userInput) - 1] != ";":
             userInput += self._getInput(isTest, testFile)
+        query = None
         try:
             command = sql_parser.parse(userInput)
             query_list = command.children[0]
@@ -207,6 +239,13 @@ class DataBase:
                 else:
                     raise SyntaxError
         except:
+            try:
+                if query.children[0].type == 'EXIT':
+                    for table in self.tables:
+                        table.closeFile()
+                    return
+            except:
+                pass
             self._putInstruction('Syntax error')
 
     '''
@@ -305,7 +344,10 @@ class DataBase:
                     break
             if idx == -1:
                 raise SyntaxError
-            self.tables.pop(idx)
+            table = self.tables.pop(idx)
+            table.closeFile()
+            dbFilePath = './database/{}.db'.format(table.name)
+            os.remove(dbFilePath)
             self._putInstruction("'DROP TABLE' requested")
             return True
         except:
@@ -542,9 +584,6 @@ class DataBase:
 
         return newTable
 
-    def _select_helper(self, table: Table, whereClause, asInfo):
-        pass
-
     def _select(self, query):
         def getTableList(inputQ):
             # select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
@@ -565,8 +604,14 @@ class DataBase:
             assert len(tableList) > 0
 
             tableWeWant = tableList[0]
+            shouldDrop = False
             for i in range(1, len(tableList)):
+                tmpTable = tableWeWant
                 tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
+                # join 중간에 나오는 임시 테이블들은 다 없엠.
+                if tmpTable != tableList[0]:
+                    tmpTable.drop()
+                shouldDrop = True
             # where 절 처리를 위해 잠시 tables 에 넣어줌
             self.tables.append(tableWeWant)
 
@@ -608,6 +653,13 @@ class DataBase:
                 for row in tableWeWant.rows:
                     if self._where(whereClause, row, tableWeWant.name):
                         rowsWeWant.append(row)
+            # DO SOMETHING
+            for row in rowsWeWant:
+                print(row)
+            if shouldDrop:
+                tableWeWant.drop()
+            else:
+                print(tableWeWant.name, 'not deleted')
             return True
         except:
             self._putInstruction('Syntax error')

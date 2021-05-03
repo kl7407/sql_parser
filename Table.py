@@ -1,3 +1,4 @@
+import os
 from bsddb3 import db
 
 
@@ -7,6 +8,9 @@ class Column:
         self.name = name
         self.isNotNull = isNotNull
         self.maxLen = maxLen
+
+    def __str__(self):
+        return "{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull)
 
     def copy(self, name: str):
         if name is None:
@@ -25,12 +29,24 @@ class Table:
         self.originalColNames = []
         self.db = db.DB()
         self.db.open('./database/{}.db'.format(self.name), dbtype=db.DB_HASH, flags=db.DB_CREATE)
+        if not self.db.get(b'cols'):
+            self.db.put(b'cols', str(self.cols))
+        if not self.db.get(b'pKeys'):
+            self.db.put(b'pKeys', str(self.pKeys))
+        if not self.db.get(b'fKeys'):
+            self.db.put(b'fKeys', str(self.fKeys))
 
     def addCol(self, col: Column):
         # 기존 column 과 중복된 이름은 받지 않음.
         for existingCol in self.cols:
             assert existingCol.name != col.name
         self.cols.append(col)
+        dbLogStr = '['
+        for col in self.cols:
+            dbLogStr += str(col) + ', '
+        dbLogStr = dbLogStr[:-2]
+        dbLogStr += ']'
+        self.db.put(b'cols', dbLogStr)
 
     def setPrimaryKey(self, colName: str):
         # 해당 colName 이 없으면 Syntax Error 일으킴.
@@ -41,6 +57,12 @@ class Table:
                     if pKey.name == colName:
                         return
                 self.pKeys.append(col)
+                dbLogStr = '['
+                for pKey in self.pKeys:
+                    dbLogStr += str(pKey) + ', '
+                dbLogStr = dbLogStr[:-2]
+                dbLogStr += ']'
+                self.db.put(b'pKeys', dbLogStr)
                 return
         raise SyntaxError
 
@@ -57,6 +79,7 @@ class Table:
                 newFKeyInfo['referredTableName'] = referredTableName
                 newFKeyInfo['referredColName'] = referredColName
                 self.fKeys.append(newFKeyInfo)
+                self.db.put(b'fKeys', str(self.fKeys))
                 return
         raise SyntaxError
 
@@ -75,7 +98,29 @@ class Table:
             if value is None and col.isNotNull:
                 raise ValueError
             row[col.name] = value
+        # private key인데 똑같은 key 조합이 있는지 확인
+        isAlreadyExistPKey = False
+        for existingRow in self.rows:
+            isSamePKey = True
+            for pKey in self.pKeys:
+                isSamePKey &= existingRow[pKey.name] == row[pKey.name]
+            if isSamePKey:
+                isAlreadyExistPKey = True
+                break
+        if isAlreadyExistPKey:
+            raise SyntaxError
+        keyStr = ''
+        for pKey in self.pKeys:
+            tmpKey = str(row[pKey.name])
+            key = ''
+            for c in tmpKey:
+                if c == '/':
+                    key += '//'
+                else:
+                    key += c
+            keyStr += key + '/'
         self.rows.append(row)
+        self.db.put(keyStr.encode(), str(row))
 
     def addOriginalTable(self, table):
         if len(table.originalTables) == 0:
@@ -140,3 +185,10 @@ class Table:
                 output = nextValue
         return output
 
+    # db file close
+    def closeFile(self):
+        self.db.close()
+
+    def drop(self):
+        self.closeFile()
+        os.remove('./database/{}.db'.format(self.name))

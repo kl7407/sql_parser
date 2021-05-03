@@ -29,3 +29,4 @@ select account_number as ac_num, branch_name as b_na, student.person_name as stu
     from account, person as student, person
     where account.account_number < 10 or person.assets = student.assets;
 show tables;
+exit;
