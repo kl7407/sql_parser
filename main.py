@@ -1,5 +1,6 @@
 from lark import *
 from Table import *
+from bsddb3 import db
 
 with open('grammar.lark') as file:
     fileInfo = file.read()
@@ -182,32 +183,36 @@ class DataBase:
         return self._boolExpression(boolExpression, row, tableName)
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
-        userInput = " "
-        while userInput[len(userInput) - 1] != ";":
-            userInput += self._getInput(isTest, testFile)
-        try:
-            command = sql_parser.parse(userInput)
-            query_list = command.children[0]
-            for query in query_list.children:
-                query_type = query.children[0].data
-                if query_type == "create_table_query":
-                    self._createTable(query)
-                elif query_type == "drop_table_query":
-                    self._dropTable(query)
-                elif query_type == "desc_query":
-                    self._desc(query)
-                elif query_type == "insert_query":
-                    self._insert(query)
-                elif query_type == "delete_query":
-                    self._delete(query)
-                elif query_type == "select_query":
-                    self._select(query)
-                elif query_type == "show_table_query":
-                    self._showTables(query)
-                else:
-                    raise SyntaxError
-        except:
-            self._putInstruction('Syntax error')
+        userInput = ""
+        while True:
+            userInput += " "
+            while userInput[len(userInput) - 1] != ";":
+                userInput += self._getInput(isTest, testFile)
+            if userInput.endswith('exit;'):
+                return
+            try:
+                command = sql_parser.parse(userInput)
+                query_list = command.children[0]
+                for query in query_list.children:
+                    query_type = query.children[0].data
+                    if query_type == "create_table_query":
+                        self._createTable(query)
+                    elif query_type == "drop_table_query":
+                        self._dropTable(query)
+                    elif query_type == "desc_query":
+                        self._desc(query)
+                    elif query_type == "insert_query":
+                        self._insert(query)
+                    elif query_type == "delete_query":
+                        self._delete(query)
+                    elif query_type == "select_query":
+                        self._select(query)
+                    elif query_type == "show_table_query":
+                        self._showTables(query)
+                    else:
+                        raise SyntaxError
+            except:
+                self._putInstruction('Syntax error')
 
     '''
     query function 여기서부터 시작.
@@ -624,4 +629,4 @@ class DataBase:
 
 
 DB = DataBase()
-DB.getUserInput(True)
+DB.getUserInput()

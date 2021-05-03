@@ -1,3 +1,6 @@
+from bsddb3 import db
+
+
 class Column:
     def __init__(self, dataType: str, name: str, maxLen=1000, isNotNull=False):
         self.dataType = dataType
@@ -20,6 +23,8 @@ class Table:
         self.fKeys = []
         self.originalTables = []
         self.originalColNames = []
+        self.db = db.DB()
+        self.db.open('./database/{}.db'.format(self.name), dbtype=db.DB_HASH, flags=db.DB_CREATE)
 
     def addCol(self, col: Column):
         # 기존 column 과 중복된 이름은 받지 않음.
