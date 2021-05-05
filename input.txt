@@ -1,3 +1,46 @@
+create table a (
+    id int,
+    name char(20),
+    primary key (id)
+);
+create table b (
+    id int,
+    a_id int,
+    primary key (id),
+    foreign key (a_id) references a(id)
+);
+create table c (
+    id int,
+    a_id int,
+    b_id int,
+    primary key (id, a_id, b_id),
+    foreign key (a_id) references a(id),
+    foreign key (b_id) references b(id)
+);
+create table d (
+    id int,
+    name char(20) not null,
+    a_id int,
+    primary key (id),
+    foreign key (a_id) references a(id)
+);
+
+create table x (
+    id char(20),
+    name char(50),
+    primary key (id)
+);
+
+create table z (
+    id char(20),
+    c_id int,
+    ca_id int,
+    cb_id int,
+    primary key (id),
+    foreign key (c_id, ca_id, cb_id) references c(id, a_id, b_id)
+);
+
+
 create table person (
     person_id int not null,
     person_name char(20),

@@ -26,6 +26,7 @@ class Table:
         self.cols = []
         self.rows = []
         self.pKeys = []
+        self.didSetPKeys = False
         self.fKeys = []
         self.refTables = []
         self.originalTables = [] # for join
@@ -55,6 +56,10 @@ class Table:
         self.db.put(b'cols', dbLogStr)
 
     def setPrimaryKey(self, colName: str):
+        # 이전에 primary key 설정한 적이 있으면 에러 일으킴.
+        if self.didSetPKeys:
+            self.drop()
+            raise DuplicatePrimaryKeyDefError('Create table has failed: primary key definition is duplicated')
         # 해당 colName 이 없으면 Syntax Error 일으킴.
         for col in self.cols:
             if col.name == colName:
@@ -290,6 +295,22 @@ class Table:
 
     # db file close
     def closeFile(self):
+        dbLogStr = '['
+        for col in self.cols:
+            dbLogStr += str(col) + ', '
+        dbLogStr = dbLogStr[:-2]
+        dbLogStr += ']'
+        self.db.put(b'cols', dbLogStr)
+
+        dbLogStr = '['
+        for pKey in self.pKeys:
+            dbLogStr += str(pKey) + ', '
+        dbLogStr = dbLogStr[:-2]
+        dbLogStr += ']'
+        self.db.put(b'pKeys', dbLogStr)
+
+        self.db.put(b'fKeys', str(self.fKeys))
+
         self.db.close()
 
     # remove db file

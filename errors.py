@@ -92,3 +92,8 @@ class CharLengthError(Exception):
 
     def __str__(self):
         return self.value
+
+
+myErrors = [DuplicateColumnDefError, DuplicatePrimaryKeyDefError, ReferenceTypeError, ReferenceNonPrimaryKeyError,
+            ReferenceColumnExistenceError, ReferenceTableExistenceError, NonExistingColumnDefError,
+            TableExistenceError, DropReferencedTableError, NoSuchTable, CharLengthError]

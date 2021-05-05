@@ -15,7 +15,10 @@ class DataBase:
         if isTest:
             return open(testFile).read()
         else:
-            return input(self.prompt)
+            output = input(self.prompt)
+            while not output.endswith(';'):
+                output += '\n' + input()
+            return output
 
     def _putInstruction(self, instruction: str):
         print(self.prompt + instruction)
@@ -24,34 +27,49 @@ class DataBase:
         self.tables = list()
         dbList = os.listdir('./database')
         # 기존에 존재하는 DB가 있으면 넣어줌.
+        dbFileName = None
         for dbFileName in dbList:
-            parsedName = dbFileName.split('.')[0]
-            newTable = Table(parsedName)
+            try:
+                parsedName = dbFileName.split('.')[0]
+                newTable = Table(parsedName)
 
-            colInfoRaw = str(newTable.db.get(b'cols'))[3:-2]
-            if len(colInfoRaw) != 0:
-                for info in colInfoRaw.split(', '):
-                    parsedInfo = info.split('/')
-                    newCol = Column(parsedInfo[0], parsedInfo[1], int(parsedInfo[2]), parsedInfo[3] == 'True')
-                    newCol.isReferred = parsedInfo[4] == 'True'
-                    newTable.addCol(newCol)
+                colInfoRaw = str(newTable.db.get(b'cols'))[3:-2]
+                if len(colInfoRaw) != 0:
+                    for info in colInfoRaw.split(', '):
+                        parsedInfo = info.split('/')
+                        newCol = Column(parsedInfo[0], parsedInfo[1], int(parsedInfo[2]), parsedInfo[3] == 'True')
+                        newCol.beReferredCnt = int(parsedInfo[4])
+                        newTable.addCol(newCol)
 
-            pKeyInfoRaw = str(newTable.db.get(b'pKeys'))[3:-2]
-            if len(pKeyInfoRaw) != 0:
-                newTable.setPrimaryKey(pKeyInfoRaw.split('/')[1])
+                pKeyInfoRaw = str(newTable.db.get(b'pKeys'))[3:-2]
+                pKeyInfos = pKeyInfoRaw.split(', ')
+                for pKeyInfo in pKeyInfos:
+                    newTable.setPrimaryKey(pKeyInfo.split('/')[1])
+                newTable.didSetPKeys = True
 
-            # fKey 같은 경우엔 dict 로 저장해서 그대로 넣어줘도 됨.
-            fKeyInfo = eval(str(newTable.db.get(b'fKeys'))[2:-1])
-            newTable.fKeys = fKeyInfo
+                # fKey 같은 경우엔 dict 로 저장해서 그대로 넣어줘도 됨.
+                fKeyInfo = eval(str(newTable.db.get(b'fKeys'))[2:-1])
+                newTable.fKeys = fKeyInfo
 
-            # row 넣어주기
-            cursor = newTable.db.cursor()
-            while x := cursor.next():
-                if x[0] in [b'cols', b'pKeys', b'fKeys']:
-                    continue
-                else:
-                    newTable.rows.append(eval(str(x[1])[2:-1]))
-            self.tables.append(newTable)
+                # row 넣어주기
+                cursor = newTable.db.cursor()
+                while x := cursor.next():
+                    if x[0] in [b'cols', b'pKeys', b'fKeys']:
+                        continue
+                    else:
+                        newTable.rows.append(eval(str(x[1])[2:-1]))
+                self.tables.append(newTable)
+            except:
+                # damaged db file error
+                self._putInstruction(f"Table '{dbFileName}' has a problem. Check it please.")
+        # 참조 설정 추가.
+        for table in self.tables:
+            for fKeyInfo in table.fKeys:
+                refTableName = fKeyInfo['referredTableName']
+                refColName = fKeyInfo['referredColName']
+                refTable = self.getTable(refTableName)
+                if refTable not in table.refTables:
+                    table.refTables.append(refTable)
 
     def getTable(self, tableName):
         for table in self.tables:
@@ -207,48 +225,55 @@ class DataBase:
         return self._boolExpression(boolExpression, row, tableName)
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
-        userInput = " "
-        while userInput[len(userInput) - 1] != ";":
-            userInput += self._getInput(isTest, testFile)
-        query = None
-        try:
-            # case insensitive 이므로 다 Lower 함.
-            command = sql_parser.parse(userInput.lower())
-            query_list = command.children[0]
-            for query in query_list.children:
-                query_type = None
-                try:
-                    query_type = query.children[0].data
-                except:
-                    raise QueryParsingError('')
-                if query_type == "create_table_query":
-                    self._createTable(query)
-                elif query_type == "drop_table_query":
-                    self._dropTable(query)
-                elif query_type == "desc_query":
-                    self._desc(query)
-                elif query_type == "insert_query":
-                    self._insert(query)
-                elif query_type == "delete_query":
-                    self._delete(query)
-                elif query_type == "select_query":
-                    self._select(query)
-                elif query_type == "show_table_query":
-                    self._showTables(query)
-                else:
-                    raise QueryParsingError('')
-        except QueryParsingError:
+        while True:
+            userInput = " "
+            while userInput[len(userInput) - 1] != ";":
+                userInput += self._getInput(isTest, testFile)
+            query = None
             try:
-                if query.children[0].type == 'EXIT':
-                    for table in self.tables:
-                        table.closeFile()
-                    return
-            except SyntaxError:
-                self._putInstruction('Syntax error')
-        except UnexpectedToken:
-            self._putInstruction('Syntax error')
-        except Exception as e:
-            self._putInstruction(str(e))
+                # case insensitive 이므로 다 Lower 함.
+                command = sql_parser.parse(userInput.lower())
+                if type(command.children[0]) == Token:
+                    if command.children[0].value == 'exit':
+                        for table in self.tables:
+                            table.closeFile()
+                        return
+                query_list = command.children[0]
+                for query in query_list.children:
+                    query_type = None
+                    try:
+                        query_type = query.children[0].data
+                    except:
+                        raise QueryParsingError('')
+                    if query_type == "create_table_query":
+                        self._createTable(query)
+                    elif query_type == "drop_table_query":
+                        self._dropTable(query)
+                    elif query_type == "desc_query":
+                        self._desc(query)
+                    elif query_type == "insert_query":
+                        self._insert(query)
+                    elif query_type == "delete_query":
+                        self._delete(query)
+                    elif query_type == "select_query":
+                        self._select(query)
+                    elif query_type == "show_table_query":
+                        self._showTables(query)
+                    else:
+                        raise QueryParsingError('')
+            except QueryParsingError:
+                try:
+                    if query.children[0].type == 'EXIT':
+                        for table in self.tables:
+                            table.closeFile()
+                        return
+                except SyntaxError:
+                    self._putInstruction('Syntax error')
+            except Exception as e:
+                if type(e) in myErrors:
+                    self._putInstruction(str(e))
+                else:
+                    self._putInstruction('Syntax error')
 
     '''
     query function 여기서부터 시작.
@@ -269,8 +294,8 @@ class DataBase:
             newTable = Table(tableName)
             tableElementList = createQuery.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
-            assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList)-1].type == 'RP'
-            tableElementList = tableElementList[1:len(tableElementList)-1]
+            assert tableElementList[0].type == 'LP' and tableElementList[len(tableElementList) - 1].type == 'RP'
+            tableElementList = tableElementList[1:len(tableElementList) - 1]
             for elementTree in tableElementList:
                 # syntax 확인
                 assert elementTree.data == 'table_element'
@@ -295,7 +320,8 @@ class DataBase:
                         if tokens[1].type != 'LP' or tokens[3].type != 'RP' or tokens[2].type != 'INT':
                             raise SyntaxError
                         columnMaxLen = int(tokens[2].value)
-                    if columnMaxLen == 0 and columnDataType == 'char':
+                    if columnMaxLen <= 0 and columnDataType == 'char':
+                        newTable.drop()
                         raise CharLengthError('Char length should be over 0')
                     newTable.addCol(Column(columnDataType, columnName, columnMaxLen, isNotNull))
 
@@ -308,18 +334,21 @@ class DataBase:
                         assert children[2].data == 'column_name_list'
                         colNameList = children[2].children
                         # 괄호 제거
-                        assert colNameList[0].type == 'LP' and colNameList[len(colNameList)-1].type == 'RP'
-                        colNameList = colNameList[1:len(colNameList)-1]
+                        assert colNameList[0].type == 'LP' and colNameList[len(colNameList) - 1].type == 'RP'
+                        colNameList = colNameList[1:len(colNameList) - 1]
                         for colNameTree in colNameList:
                             assert colNameTree.data == 'column_name'
                             colName = colNameTree.children[0].value
                             newTable.setPrimaryKey(colName)
+                        newTable.didSetPKeys = True
                     elif constraintTypeTree.data == 'referential_constraint':
                         children = constraintTypeTree.children
                         assert children[0].type == 'FOREIGN' and children[1].type == 'KEY'
                         assert children[2].data == 'column_name_list'
                         colNameListTree = children[2]
-                        colNameList = colNameListTree.children[1].children
+                        colNameList = []
+                        for colNameTree in colNameListTree.children[1:-1]:
+                            colNameList.append(colNameTree.children[0].value)
                         assert children[3].type == 'REFERENCES' and children[4].data == 'table_name' and \
                                children[5].data == 'column_name_list'
                         referredTableName = children[4].children[0].value
@@ -332,8 +361,7 @@ class DataBase:
                         fKeyInfoList = []
                         referredColNameTreeList = children[5].children[1: len(children[5].children) - 1]  # 괄호 제거
                         for i in range(len(colNameList)):
-                            colNameTree = colNameList[i]
-                            colName = colNameTree.value
+                            colName = colNameList[i]
                             referredColName = referredColNameTreeList[i].children[0].value
                             fKeyInfoList.append({'colName': colName, 'referredColName': referredColName})
                         newTable.setForeignKey(referredTable, fKeyInfoList)
@@ -358,11 +386,11 @@ class DataBase:
                     idx = i
                     break
             if idx == -1:
-                raise SyntaxError
+                raise NoSuchTable('No such table')
             table = self.tables[idx]
             isReferred = False
             for col in table.cols:
-                isReferred |= col.isReferred
+                isReferred |= col.beReferredCnt != 0
             if not isReferred:
                 table.drop()
                 self.tables.pop(idx)
@@ -420,11 +448,11 @@ class DataBase:
                 colTokenList = sourceTree.children[0].children
                 valTokenList = sourceTree.children[1].children
                 # 괄호 및 'value' 확인
-                assert colTokenList[0].type == 'LP' and colTokenList[len(colTokenList)-1].type == 'RP'
+                assert colTokenList[0].type == 'LP' and colTokenList[len(colTokenList) - 1].type == 'RP'
                 assert valTokenList[0].type == 'VALUES' and \
-                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList)-1].type == 'RP'
-                colTreeList = colTokenList[1:len(colTokenList)-1]
-                valTreeList = valTokenList[2:len(valTokenList)-1]
+                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList) - 1].type == 'RP'
+                colTreeList = colTokenList[1:len(colTokenList) - 1]
+                valTreeList = valTokenList[2:len(valTokenList) - 1]
                 assert len(colTreeList) == len(valTreeList)
                 for i in range(len(colTreeList)):
                     colTree = colTreeList[i]
@@ -439,9 +467,9 @@ class DataBase:
                         data['value'] = int(data['value'])
                     if data['type'] == 'STR':
                         # string 일 경우 따옴표 없에줌.
-                        assert data['value'][0] == data['value'][len(data['value'][0])-1] and \
+                        assert data['value'][0] == data['value'][len(data['value'][0]) - 1] and \
                                data['value'][0] in ['\'', '"']
-                        data['value'] = data['value'][1:len(data['value'])-1]
+                        data['value'] = data['value'][1:len(data['value']) - 1]
                     if data['type'] == 'NULL':
                         data['value'] = None
                     colData.append(data)
@@ -450,7 +478,7 @@ class DataBase:
                 assert sourceTree.children[0].data == 'value_list'
                 valTokenList = sourceTree.children[0].children
                 assert valTokenList[0].type == 'VALUES' and \
-                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList)-1].type == 'RP'
+                       valTokenList[1].type == 'LP' and valTokenList[len(valTokenList) - 1].type == 'RP'
                 valTreeList = valTokenList[2:len(valTokenList) - 1]
                 assert len(table.cols) == len(valTreeList)
                 for i in range(len(table.cols)):
@@ -550,7 +578,8 @@ class DataBase:
                 if found:
                     break
             assert originalTable is not None
-            return '{}.{}'.format(originalTable.name, colName)
+            return f'{originalTable.name}.{colName}'
+
         """
         테이블 가명은 이미 다 적용된 상태.
 
@@ -558,14 +587,14 @@ class DataBase:
         :return: Table
         """
         if tableName is None:
-            tableName = 'joined_{}_{}'.format(table1.name, table2.name)
+            tableName = f'joined_{table1.name}_{table2.name}'
         newTable = Table(tableName)
         # table1, table2 에 같은 이름의 column이 있으면 앞에 테이블 이름 추가해서 넣어줌.
         for col in table1.cols:
             colName = col.name
             if isIn(colName, table2):
                 if len(table1.originalTables) == 0:
-                    colName = '{}.{}'.format(table1.name, colName)
+                    colName = f'{table1.name}.{colName}'
                 else:
                     colName = getTableName(table1, colName)
             newTable.addCol(col.copy(colName))
@@ -573,7 +602,7 @@ class DataBase:
             colName = col.name
             if isIn(colName, table1):
                 if len(table2.originalTables) == 0:
-                    colName = '{}.{}'.format(table2.name, colName)
+                    colName = f'{table2.name}.{colName}'
                 else:
                     colName = getTableName(table2, colName)
             newTable.addCol(col.copy(colName))
@@ -619,6 +648,7 @@ class DataBase:
                     table = table.copy(alias)
                 referredTables.append(table)
             return referredTables
+
         try:
             selectQuery = query.children[0]
             assert selectQuery.data == 'select_query' and selectQuery.children[0].type == 'SELECT'
@@ -655,11 +685,11 @@ class DataBase:
                     if len(nameElements) != 2:
                         newName = nameElements[3].children[0].value
                         # tableWhatWeWant 에 tableName.colName 형태로 안 저장되어 있을수도 있으므로 한 번 더 체크함.
-                        if not tableWeWant.changeColName(tableName+'.'+originalName, newName):
+                        if not tableWeWant.changeColName(tableName + '.' + originalName, newName):
                             tableWeWant.changeColName(originalName, newName)
                         selectedColNames.append(newName)
                     else:
-                        selectedColNames.append(tableName+'.'+originalName)
+                        selectedColNames.append(tableName + '.' + originalName)
                 else:
                     raise SyntaxError
 
@@ -703,5 +733,6 @@ class DataBase:
             return e
 
 
-DB = DataBase()
-DB.getUserInput(True)
+if __name__ == '__main__':
+    DB = DataBase()
+    DB.getUserInput(True)
