@@ -12,7 +12,7 @@ class Column:
         self.beReferredCnt = 0
 
     def __str__(self):
-        return "{}/{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull, self.beReferredCnt)
+        return f"{self.dataType}/{self.name}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
 
     def copy(self, name=None):
         if name is None:
@@ -31,7 +31,7 @@ class Table:
         self.originalTables = [] # for join
         self.originalColNames = [] # for join
         self.db = db.DB()
-        self.filePath = './database/{}.db'.format(self.name)
+        self.filePath = f'./database/{self.name}.db'
         self.db.open(self.filePath, dbtype=db.DB_HASH, flags=db.DB_CREATE)
         if not self.db.get(b'cols'):
             self.db.put(b'cols', str(self.cols))
@@ -74,9 +74,7 @@ class Table:
                 self.db.put(b'pKeys', dbLogStr)
                 return
         self.drop()
-        raise NonExistingColumnDefError(
-                    "Create table has failed: '{}' does not exists in column definition".format(colName)
-                )
+        raise NonExistingColumnDefError(f"Create table has failed: '{colName}' does not exists in column definition")
 
     def setForeignKey(self, referredTable, fKeyInfoList: list):
         refPKeyNameList = []
@@ -116,7 +114,7 @@ class Table:
             if myCol is None:
                 self.drop()
                 raise NonExistingColumnDefError(
-                    "Create table has failed: '{}' does not exists in column definition".format(colName)
+                    f"Create table has failed: '{colName}' does not exists in column definition"
                 )
             refCol = None
             for pKey in referredTable.pKeys:
@@ -278,7 +276,7 @@ class Table:
             colInfos.append('{:16}{:12}{:12}'.format(dataType, nullable, keyType))
             pass
         print('-------------------------------------------------')
-        print('table_name [{}]'.format(self.name))
+        print(f'table_name [{self.name}]')
         tabSize = max((2 + (maxLen - 1) // 4) * 4, 16) - len('column_name')
         tabbed = 'column_name' + ' ' * tabSize
         print('{}{:16}{:12}{:12}'.format(tabbed, 'type', 'null', 'key'))
@@ -287,7 +285,7 @@ class Table:
             colInfo = colInfos[i]
             tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(col.name)
             tabbedName = col.name + ' ' * tabSize
-            print('{}{}'.format(tabbedName, colInfo))
+            print(f'{tabbedName}{colInfo}')
         print('-------------------------------------------------')
 
     # db file close
@@ -311,4 +309,4 @@ class Table:
                             break
                     break
         self.db.close()
-        os.remove('./database/{}.db'.format(self.name))
+        os.remove(f'./database/{self.name}.db')
