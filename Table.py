@@ -9,10 +9,10 @@ class Column:
         self.name = name
         self.isNotNull = isNotNull
         self.maxLen = maxLen
-        self.isReferred = False
+        self.beReferredCnt = 0
 
     def __str__(self):
-        return "{}/{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull, self.isReferred)
+        return "{}/{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull, self.beReferredCnt)
 
     def copy(self, name=None):
         if name is None:
@@ -136,7 +136,7 @@ class Table:
             newFKeyInfo['column'] = colName
             newFKeyInfo['referredTableName'] = referredTable.name
             newFKeyInfo['referredColName'] = refCol.name
-            refCol.isReferred = True
+            refCol.beReferredCnt += 1
             self.refTables.append(referredTable)
             self.fKeys.append(newFKeyInfo)
             self.db.put(b'fKeys', str(self.fKeys))
@@ -279,13 +279,13 @@ class Table:
             pass
         print('-------------------------------------------------')
         print('table_name [{}]'.format(self.name))
-        tabSize = (2 + (maxLen - 1) // 4) * 4 - len('column_name')
+        tabSize = max((2 + (maxLen - 1) // 4) * 4, 16) - len('column_name')
         tabbed = 'column_name' + ' ' * tabSize
         print('{}{:16}{:12}{:12}'.format(tabbed, 'type', 'null', 'key'))
         for i in range(len(self.cols)):
             col = self.cols[i]
             colInfo = colInfos[i]
-            tabSize = (2 + (maxLen-1)//4)*4 - len(col.name)
+            tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(col.name)
             tabbedName = col.name + ' ' * tabSize
             print('{}{}'.format(tabbedName, colInfo))
         print('-------------------------------------------------')
@@ -297,7 +297,7 @@ class Table:
     # remove db file
     def drop(self):
         for col in self.cols:
-            if col.isReferred:
+            if col.beReferredCnt != 0:
                 raise DropReferencedTableError(f"Drop table has failed: '{self.name}' is referenced by other table")
         # referred table 에서 isReferred = False 로 변경.
         for fKeyInfo in self.fKeys:
@@ -307,7 +307,7 @@ class Table:
                 if table.name == refTableName:
                     for col in table.cols:
                         if col.name == refColName:
-                            col.isReferred = False
+                            col.beReferredCnt -= 1
                             break
                     break
         self.db.close()
