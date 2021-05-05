@@ -1,5 +1,6 @@
 import os
 from bsddb3 import db
+from errors import *
 
 
 class Column:
@@ -8,11 +9,12 @@ class Column:
         self.name = name
         self.isNotNull = isNotNull
         self.maxLen = maxLen
+        self.isReferred = False
 
     def __str__(self):
-        return "{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull)
+        return "{}/{}/{}/{}/{}".format(self.dataType, self.name, self.maxLen, self.isNotNull, self.isReferred)
 
-    def copy(self, name: str):
+    def copy(self, name=None):
         if name is None:
             name = self.name
         return Column(self.dataType, name, self.maxLen, self.isNotNull)
@@ -25,10 +27,12 @@ class Table:
         self.rows = []
         self.pKeys = []
         self.fKeys = []
-        self.originalTables = []
-        self.originalColNames = []
+        self.refTables = []
+        self.originalTables = [] # for join
+        self.originalColNames = [] # for join
         self.db = db.DB()
-        self.db.open('./database/{}.db'.format(self.name), dbtype=db.DB_HASH, flags=db.DB_CREATE)
+        self.filePath = './database/{}.db'.format(self.name)
+        self.db.open(self.filePath, dbtype=db.DB_HASH, flags=db.DB_CREATE)
         if not self.db.get(b'cols'):
             self.db.put(b'cols', str(self.cols))
         if not self.db.get(b'pKeys'):
@@ -39,7 +43,9 @@ class Table:
     def addCol(self, col: Column):
         # 기존 column 과 중복된 이름은 받지 않음.
         for existingCol in self.cols:
-            assert existingCol.name != col.name
+            if existingCol.name == col.name:
+                self.drop()
+                raise DuplicateColumnDefError('Create table has failed: column definition is duplicated')
         self.cols.append(col)
         dbLogStr = '['
         for col in self.cols:
@@ -55,7 +61,10 @@ class Table:
                 # 이미 들어가 있을 경우를 위해 한 번 체크
                 for pKey in self.pKeys:
                     if pKey.name == colName:
-                        return
+                        self.drop()
+                        raise DuplicatePrimaryKeyDefError('Create table has failed: primary key definition is duplicated')
+                # primary key 는 자동적으로 not null
+                col.isNotNull = True
                 self.pKeys.append(col)
                 dbLogStr = '['
                 for pKey in self.pKeys:
@@ -64,24 +73,73 @@ class Table:
                 dbLogStr += ']'
                 self.db.put(b'pKeys', dbLogStr)
                 return
-        raise SyntaxError
+        self.drop()
+        raise NonExistingColumnDefError(
+                    "Create table has failed: '{}' does not exists in column definition".format(colName)
+                )
 
-    def setForeignKey(self, colName: str, referredTableName, referredColName):
-        # 해당 colName 이 없으면 Syntax Error 일으킴.
-        for col in self.cols:
-            if col.name == colName:
-                newFKeyInfo = dict()
-                newFKeyInfo['column'] = colName
-                # 이미 들어가 있을 경우를 위해 한 번 체크
-                for fKey in self.fKeys:
-                    if fKey['column'].name == colName:
-                        return
-                newFKeyInfo['referredTableName'] = referredTableName
-                newFKeyInfo['referredColName'] = referredColName
-                self.fKeys.append(newFKeyInfo)
-                self.db.put(b'fKeys', str(self.fKeys))
-                return
-        raise SyntaxError
+    def setForeignKey(self, referredTable, fKeyInfoList: list):
+        refPKeyNameList = []
+        myFKeyNameList = []
+        for fKeyInfo in fKeyInfoList:
+            refPKeyNameList.append(fKeyInfo['referredColName'])
+            myFKeyNameList.append(fKeyInfo['colName'])
+        realRefPKeyNameList = []
+        realRefColNameList = []
+        for pKey in referredTable.pKeys:
+            realRefPKeyNameList.append(pKey.name)
+        for col in referredTable.cols:
+            realRefColNameList.append(col.name)
+
+        # ReferenceNonPrimaryKeyError, ReferenceColumnExistenceError check
+        for referredColName in refPKeyNameList:
+            if referredColName not in realRefColNameList:
+                self.drop()
+                raise ReferenceColumnExistenceError('Create table has failed: foreign key references non existing column')
+            if referredColName not in realRefPKeyNameList:
+                self.drop()
+                raise ReferenceNonPrimaryKeyError('Create table has failed: foreign key references non primary key column')
+        for pKeyName in realRefPKeyNameList:
+            if pKeyName not in refPKeyNameList:
+                self.drop()
+                raise ReferenceNonPrimaryKeyError('Create table has failed: foreign key references non primary key column')
+
+        for i in range(len(refPKeyNameList)):
+            colName = myFKeyNameList[i]
+            referredColName = refPKeyNameList[i]
+            myCol = None
+            for col in self.cols:
+                if col.name == colName:
+                    myCol = col
+                    break
+            # 해당 colName 이 없으면 Syntax Error 일으킴.
+            if myCol is None:
+                self.drop()
+                raise NonExistingColumnDefError(
+                    "Create table has failed: '{}' does not exists in column definition".format(colName)
+                )
+            refCol = None
+            for pKey in referredTable.pKeys:
+                if pKey.name == referredColName:
+                    refCol = pKey
+                    break
+            # 타입 일치하는지 확인.
+            if not myCol.dataType == refCol.dataType:
+                self.drop()
+                raise ReferenceTypeError('Create table has failed: foreign key references wrong type')
+            # char type 일 때 길이까지 확인.
+            if myCol.dataType == 'char' and myCol.maxLen != refCol.maxLen:
+                self.drop()
+                raise ReferenceTypeError('Create table has failed: foreign key references wrong type')
+
+            newFKeyInfo = dict()
+            newFKeyInfo['column'] = colName
+            newFKeyInfo['referredTableName'] = referredTable.name
+            newFKeyInfo['referredColName'] = refCol.name
+            refCol.isReferred = True
+            self.refTables.append(referredTable)
+            self.fKeys.append(newFKeyInfo)
+            self.db.put(b'fKeys', str(self.fKeys))
 
     def addRow(self, rowInfo: dict):
         row = dict()
@@ -131,12 +189,19 @@ class Table:
 
     def copy(self, alias):
         if alias is None:
-            alias = self.name
+            raise SyntaxError
         newTable = Table(alias)
-        newTable.cols = self.cols
-        newTable.rows = self.rows
-        newTable.pKeys = self.pKeys
+        # isReferred = False 로 만들기 위해.
+        for col in self.cols:
+            newTable.cols.append(col.copy())
+        # pKeys 에 들어가는 건 cols 에 있는 것과 똑같은 객체이므로.
+        for pKey in self.pKeys:
+            for col in newTable.cols:
+                if col.name == pKey.name:
+                    newTable.pKeys.append(col)
+                    break
         newTable.fKeys = self.fKeys
+        newTable.rows = self.rows
         return newTable
 
     def changeColName(self, originalName, newName):
@@ -185,10 +250,65 @@ class Table:
                 output = nextValue
         return output
 
+    def showInfo(self):
+        maxLen = 0
+        foreignKeyNames = []
+        for fKeyInfo in self.fKeys:
+            foreignKeyNames.append(fKeyInfo['column'])
+
+        colInfos = []
+        for col in self.cols:
+            nameLen = len(col.name)
+            if maxLen < nameLen:
+                maxLen = nameLen
+            dataType = col.dataType
+            if dataType == 'char':
+                dataType = f'char({col.maxLen})'
+            nullable = 'Y'
+            if col.isNotNull:
+                nullable = 'N'
+            keyType = ''
+            if col in self.pKeys:
+                keyType = 'PRI'
+                if col.name in foreignKeyNames:
+                    keyType += '/FOR'
+            else:
+                if col.name in foreignKeyNames:
+                    keyType = 'FOR'
+            colInfos.append('{:16}{:12}{:12}'.format(dataType, nullable, keyType))
+            pass
+        print('-------------------------------------------------')
+        print('table_name [{}]'.format(self.name))
+        tabSize = (2 + (maxLen - 1) // 4) * 4 - len('column_name')
+        tabbed = 'column_name' + ' ' * tabSize
+        print('{}{:16}{:12}{:12}'.format(tabbed, 'type', 'null', 'key'))
+        for i in range(len(self.cols)):
+            col = self.cols[i]
+            colInfo = colInfos[i]
+            tabSize = (2 + (maxLen-1)//4)*4 - len(col.name)
+            tabbedName = col.name + ' ' * tabSize
+            print('{}{}'.format(tabbedName, colInfo))
+        print('-------------------------------------------------')
+
     # db file close
     def closeFile(self):
         self.db.close()
 
+    # remove db file
     def drop(self):
-        self.closeFile()
+        for col in self.cols:
+            if col.isReferred:
+                raise DropReferencedTableError(f"Drop table has failed: '{self.name}' is referenced by other table")
+        # referred table 에서 isReferred = False 로 변경.
+        for fKeyInfo in self.fKeys:
+            refTableName = fKeyInfo['referredTableName']
+            refColName = fKeyInfo['referredColName']
+            for table in self.refTables:
+                if table.name == refTableName:
+                    for col in table.cols:
+                        if col.name == refColName:
+                            col.isReferred = False
+                            break
+                    break
+        self.db.close()
         os.remove('./database/{}.db'.format(self.name))

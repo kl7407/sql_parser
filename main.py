@@ -1,18 +1,11 @@
 import os
 from lark import *
 from Table import *
-from bsddb3 import db
+from errors import *
 
 with open('grammar.lark') as file:
     fileInfo = file.read()
     sql_parser = Lark(fileInfo, start="command", lexer="standard")
-
-
-def isAlphabet(letter: str):
-    if len(letter) != 1:
-        return False
-    alphabets = 'abcdefghijklmnopqrstuvwxyz_'
-    return letter.lower() in alphabets
 
 
 class DataBase:
@@ -40,6 +33,7 @@ class DataBase:
                 for info in colInfoRaw.split(', '):
                     parsedInfo = info.split('/')
                     newCol = Column(parsedInfo[0], parsedInfo[1], int(parsedInfo[2]), parsedInfo[3] == 'True')
+                    newCol.isReferred = parsedInfo[4] == 'True'
                     newTable.addCol(newCol)
 
             pKeyInfoRaw = str(newTable.db.get(b'pKeys'))[3:-2]
@@ -47,7 +41,7 @@ class DataBase:
                 newTable.setPrimaryKey(pKeyInfoRaw.split('/')[1])
 
             # fKey 같은 경우엔 dict 로 저장해서 그대로 넣어줘도 됨.
-            fKeyInfo = eval(str(newTable.db.get(b'fKeys'))[1:])
+            fKeyInfo = eval(str(newTable.db.get(b'fKeys'))[2:-1])
             newTable.fKeys = fKeyInfo
 
             # row 넣어주기
@@ -218,10 +212,15 @@ class DataBase:
             userInput += self._getInput(isTest, testFile)
         query = None
         try:
-            command = sql_parser.parse(userInput)
+            # case insensitive 이므로 다 Lower 함.
+            command = sql_parser.parse(userInput.lower())
             query_list = command.children[0]
             for query in query_list.children:
-                query_type = query.children[0].data
+                query_type = None
+                try:
+                    query_type = query.children[0].data
+                except:
+                    raise QueryParsingError('')
                 if query_type == "create_table_query":
                     self._createTable(query)
                 elif query_type == "drop_table_query":
@@ -237,16 +236,19 @@ class DataBase:
                 elif query_type == "show_table_query":
                     self._showTables(query)
                 else:
-                    raise SyntaxError
-        except:
+                    raise QueryParsingError('')
+        except QueryParsingError:
             try:
                 if query.children[0].type == 'EXIT':
                     for table in self.tables:
                         table.closeFile()
                     return
-            except:
-                pass
+            except SyntaxError:
+                self._putInstruction('Syntax error')
+        except UnexpectedToken:
             self._putInstruction('Syntax error')
+        except Exception as e:
+            self._putInstruction(str(e))
 
     '''
     query function 여기서부터 시작.
@@ -260,6 +262,10 @@ class DataBase:
                    createQuery.children[0].type == 'CREATE' and createQuery.children[1].type == 'TABLE' and \
                    createQuery.children[2].data == 'table_name' and createQuery.children[3].data == 'table_element_list'
             tableName = createQuery.children[2].children[0].value
+            # TableExistenceError check
+            for preExistTable in self.tables:
+                if preExistTable.name == tableName:
+                    raise TableExistenceError('Create table has failed: table with the same name already exists')
             newTable = Table(tableName)
             tableElementList = createQuery.children[3].children
             # table element list 에서 괄호가 제대로 안 되어 있을 경우 syntax error 생성
@@ -289,6 +295,8 @@ class DataBase:
                         if tokens[1].type != 'LP' or tokens[3].type != 'RP' or tokens[2].type != 'INT':
                             raise SyntaxError
                         columnMaxLen = int(tokens[2].value)
+                    if columnMaxLen == 0 and columnDataType == 'char':
+                        raise CharLengthError('Char length should be over 0')
                     newTable.addCol(Column(columnDataType, columnName, columnMaxLen, isNotNull))
 
                 elif elementTree.children[0].data == 'table_constraint_definition':
@@ -315,20 +323,27 @@ class DataBase:
                         assert children[3].type == 'REFERENCES' and children[4].data == 'table_name' and \
                                children[5].data == 'column_name_list'
                         referredTableName = children[4].children[0].value
+                        referredTable = self.getTable(referredTableName)
+                        if referredTable is None:
+                            newTable.drop()
+                            raise ReferenceTableExistenceError(
+                                'Create table has failed: foreign key references non existing table'
+                            )
+                        fKeyInfoList = []
                         referredColNameTreeList = children[5].children[1: len(children[5].children) - 1]  # 괄호 제거
                         for i in range(len(colNameList)):
                             colNameTree = colNameList[i]
                             colName = colNameTree.value
                             referredColName = referredColNameTreeList[i].children[0].value
-                            newTable.setForeignKey(colName, referredTableName, referredColName)
+                            fKeyInfoList.append({'colName': colName, 'referredColName': referredColName})
+                        newTable.setForeignKey(referredTable, fKeyInfoList)
                 else:
                     raise SyntaxError
             self.tables.append(newTable)
             self._putInstruction("'CREATE TABLE' requested")
             return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+        except Exception as e:
+            raise e
 
     def _dropTable(self, query):
         try:
@@ -344,15 +359,22 @@ class DataBase:
                     break
             if idx == -1:
                 raise SyntaxError
-            table = self.tables.pop(idx)
-            table.closeFile()
-            dbFilePath = './database/{}.db'.format(table.name)
-            os.remove(dbFilePath)
-            self._putInstruction("'DROP TABLE' requested")
-            return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+            table = self.tables[idx]
+            isReferred = False
+            for col in table.cols:
+                isReferred |= col.isReferred
+            if not isReferred:
+                table.drop()
+                self.tables.pop(idx)
+                self._putInstruction(f"'{tableName}' table is dropped")
+                return True
+            else:
+                raise DropReferencedTableError(
+                    f"Drop table has failed: '{tableName}' is referenced by other table"
+                )
+
+        except Exception as e:
+            raise e
 
     def _desc(self, query):
         try:
@@ -360,12 +382,14 @@ class DataBase:
             children = descQuery.children
             assert descQuery.data == 'desc_query'
             assert children[0].type == 'DESC' and children[1].data == 'table_name'
-            # tableName = children[1].children[0].value
-            self._putInstruction("'DESC' requested")
-            return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+            tableName = children[1].children[0].value
+            for table in self.tables:
+                if table.name == tableName:
+                    table.showInfo()
+                    return True
+            raise NoSuchTable('No such table')
+        except Exception as e:
+            raise e
 
     def _insert(self, query):
         try:
@@ -474,9 +498,8 @@ class DataBase:
             table.addRow(row)
             self._putInstruction("'INSERT' requested")
             return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+        except Exception as e:
+            return e
 
     def _delete(self, query):
         try:
@@ -505,9 +528,8 @@ class DataBase:
                     table.rows.remove(row)
             self._putInstruction("'DELETE' requested")
             return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+        except Exception as e:
+            return e
 
     def _join_helper(self, table1: Table, table2: Table, tableName: str):
         def isIn(colName, t):
@@ -604,14 +626,14 @@ class DataBase:
             assert len(tableList) > 0
 
             tableWeWant = tableList[0]
-            shouldDrop = False
+            tmpTables = []
+            for table in tableList:
+                if table not in self.tables:
+                    tmpTables.append(table)
             for i in range(1, len(tableList)):
-                tmpTable = tableWeWant
-                tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
                 # join 중간에 나오는 임시 테이블들은 다 없엠.
-                if tmpTable != tableList[0]:
-                    tmpTable.drop()
-                shouldDrop = True
+                tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
+                tmpTables.append(tableWeWant)
             # where 절 처리를 위해 잠시 tables 에 넣어줌
             self.tables.append(tableWeWant)
 
@@ -654,25 +676,31 @@ class DataBase:
                     if self._where(whereClause, row, tableWeWant.name):
                         rowsWeWant.append(row)
             # DO SOMETHING
+            self._putInstruction("'SELECT' requested")
+            '''
             for row in rowsWeWant:
                 print(row)
-            if shouldDrop:
-                tableWeWant.drop()
-            else:
-                print(tableWeWant.name, 'not deleted')
+            '''
+            # 중간에 join 되었던 table 제거.
+            for table in tmpTables:
+                table.drop()
+                if table in self.tables:
+                    self.tables.pop(self.tables.index(table))
             return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+        except Exception as e:
+            raise e
 
     def _showTables(self, query):
         try:
             showTableQuery = query.children[0]
             assert showTableQuery.children[0].type == 'SHOW' and showTableQuery.children[1].type == 'TABLES'
+            print('----------------')
+            for table in self.tables:
+                print(table.name)
+            print('----------------')
             return True
-        except:
-            self._putInstruction('Syntax error')
-            return False
+        except Exception as e:
+            return e
 
 
 DB = DataBase()

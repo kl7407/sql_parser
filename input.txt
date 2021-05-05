@@ -8,10 +8,10 @@ create table person (
 create table account (
     account_number int not null,
     branch_name char(15),
-    person_name char(20),
+    person_id int,
     assets int,
     primary key(account_number),
-    foreign key(person_name) references person(person_name)
+    foreign key(person_id) references person(person_id)
 );
 insert into person values(1, 'Jhon', "M");
 insert into person values(2, 'Woo', "M");
@@ -25,8 +25,12 @@ insert into account values(4, 'Seoul', 'Song', 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul', null, 1600);
 delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
-select account_number as ac_num, branch_name as b_na, student.person_name as student_name
+select *
     from account, person as student, person
     where account.account_number < 10 or person.assets = student.assets;
+desc person;
+desc account;
 show tables;
+DROP TABLE account;
+drop table person;
 exit;
