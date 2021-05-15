@@ -230,50 +230,61 @@ class DataBase:
             while userInput[len(userInput) - 1] != ";":
                 userInput += self._getInput(isTest, testFile)
             query = None
-            try:
-                # case insensitive 이므로 다 Lower 함.
-                command = sql_parser.parse(userInput.lower())
-                if type(command.children[0]) == Token:
-                    if command.children[0].value == 'exit':
-                        for table in self.tables:
-                            table.closeFile()
-                        return
-                query_list = command.children[0]
-                for query in query_list.children:
-                    query_type = None
-                    try:
-                        query_type = query.children[0].data
-                    except:
-                        raise QueryParsingError('')
-                    if query_type == "create_table_query":
-                        self._createTable(query)
-                    elif query_type == "drop_table_query":
-                        self._dropTable(query)
-                    elif query_type == "desc_query":
-                        self._desc(query)
-                    elif query_type == "insert_query":
-                        self._insert(query)
-                    elif query_type == "delete_query":
-                        self._delete(query)
-                    elif query_type == "select_query":
-                        self._select(query)
-                    elif query_type == "show_table_query":
-                        self._showTables(query)
-                    else:
-                        raise QueryParsingError('')
-            except QueryParsingError:
+            # case insensitive 이므로 다 Lower 함.
+            userInputList = userInput.lower().strip().split(';')
+            for i in range(len(userInputList)):
+                tmpInput = userInputList[i]
+                if i is not len(userInputList) - 1:
+                    tmpInput += ';'
                 try:
-                    if query.children[0].type == 'EXIT':
+                    command = sql_parser.parse(tmpInput)
+                    if type(command.children[0]) == Token:
+                        if command.children[0].value == 'exit':
+                            for table in self.tables:
+                                table.closeFile()
+                            self.tables = []
+                            return
+                    query_list = command.children[0]
+                    for query in query_list.children:
+                        query_type = None
+                        try:
+                            query_type = query.children[0].data
+                        except:
+                            raise QueryParsingError('')
+                        try:
+                            if query_type == "create_table_query":
+                                self._createTable(query)
+                            elif query_type == "drop_table_query":
+                                self._dropTable(query)
+                            elif query_type == "desc_query":
+                                self._desc(query)
+                            elif query_type == "insert_query":
+                                self._insert(query)
+                            elif query_type == "delete_query":
+                                self._delete(query)
+                            elif query_type == "select_query":
+                                self._select(query)
+                            elif query_type == "show_table_query":
+                                self._showTables(query)
+                            else:
+                                raise QueryParsingError('')
+                        except Exception as e:
+                            if type(e) in myErrors:
+                                self._putInstruction(str(e))
+                            else:
+                                if isTest:
+                                    print(e)
+                                self._putInstruction('Syntax error')
+                except Exception as e:
+                    if tmpInput.strip() == 'exit;':
                         for table in self.tables:
                             table.closeFile()
+                        self.tables = []
                         return
-                except SyntaxError:
-                    self._putInstruction('Syntax error')
-            except Exception as e:
-                if type(e) in myErrors:
-                    self._putInstruction(str(e))
-                else:
-                    self._putInstruction('Syntax error')
+                    else:
+                        if isTest:
+                            print(e)
+                        self._putInstruction('Syntax error')
 
     '''
     query function 여기서부터 시작.
@@ -461,8 +472,14 @@ class DataBase:
                     assert colTree.children[0].type == 'IDENTIFIER'
                     data = dict()
                     data['column_name'] = colTree.children[0].value
-                    data['type'] = valTree.children[0].children[0].type
-                    data['value'] = valTree.children[0].children[0].value
+                    if type(valTree.children[0]) is Tree:
+                        # comparable value 일 경우
+                        data['type'] = valTree.children[0].children[0].type
+                        data['value'] = valTree.children[0].children[0].value
+                    else:
+                        # Null 일 경우
+                        data['type'] = valTree.children[0].type
+                        data['value'] = valTree.children[0].value
                     if data['type'] == 'INT':
                         data['value'] = int(data['value'])
                     if data['type'] == 'STR':
@@ -513,21 +530,29 @@ class DataBase:
                     if c.name == data['column_name']:
                         idx = i
                         break
-                assert idx != -1
+                if idx == -1:
+                    raise InsertColumnExistenceError(f"Insertion has failed: '{data['column_name']}' does not exist")
                 col = table.cols[idx]
                 if data['type'] == 'NULL':
-                    assert not col.isNotNull
+                    # error 판단 부분 Table class 에서 처리하는 걸로 바뀜.
                     row[col.name] = {'type': col.dataType, 'value': None}
                 else:
-                    assert col.dataType == 'int' and data['type'] == 'INT' or \
-                           col.dataType == 'char' and data['type'] == 'STR' or \
-                           col.dataType == 'date' and data['type'] == 'DATE'
-                    row[col.name] = {'type': col.dataType, 'value': data['value']}
+                    def converter(dType):
+                        if dType == 'INT' or dType == 'int':
+                            return 'int'
+                        elif dType == 'STR' or dType == 'char':
+                            return 'char'
+                        elif dType == 'date' or dType == 'DATE':
+                            return 'date'
+                        else:
+                            raise SyntaxError
+                    # error 판단 부분 Table class 에서 처리하는 걸로 바뀜.
+                    row[col.name] = {'type': converter(data['type']), 'value': data['value']}
             table.addRow(row)
             self._putInstruction("'INSERT' requested")
             return True
         except Exception as e:
-            return e
+            raise e
 
     def _delete(self, query):
         try:
@@ -541,9 +566,12 @@ class DataBase:
                 if t.name == tableName:
                     table = t
                     break
-            assert table is not None
+            if table is None:
+                raise NoSuchTable("No such table")
             # 모든 row 를 삭제할 때
+            cntDelete = 0
             if len(deleteQuery.children) == 3:
+                cntDelete += len(table.rows)
                 table.rows = []
             # where 절이 있을 경우
             elif len(deleteQuery.children) == 4:
@@ -552,12 +580,13 @@ class DataBase:
                 for row in table.rows:
                     if self._where(whereClauseTree, row, tableName):
                         shouldBeDeleted.append(row)
+                cntDelete += len(shouldBeDeleted)
                 for row in shouldBeDeleted:
                     table.rows.remove(row)
-            self._putInstruction("'DELETE' requested")
+            self._putInstruction(f"{cntDelete} row(s) are deleted")
             return True
         except Exception as e:
-            return e
+            raise e
 
     def _join_helper(self, table1: Table, table2: Table, tableName: str):
         def isIn(colName, t):
@@ -636,6 +665,8 @@ class DataBase:
         return newTable
 
     def _select(self, query):
+        print('select started')
+
         def getTableList(inputQ):
             # select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
             referredTables = []
@@ -665,7 +696,8 @@ class DataBase:
                 tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
                 tmpTables.append(tableWeWant)
             # where 절 처리를 위해 잠시 tables 에 넣어줌
-            self.tables.append(tableWeWant)
+            if tableWeWant not in self.tables:
+                self.tables.append(tableWeWant)
 
             selectList = selectQuery.children[1].children
             selectedColNames = []
@@ -706,11 +738,8 @@ class DataBase:
                     if self._where(whereClause, row, tableWeWant.name):
                         rowsWeWant.append(row)
             # DO SOMETHING
-            self._putInstruction("'SELECT' requested")
-            '''
             for row in rowsWeWant:
                 print(row)
-            '''
             # 중간에 join 되었던 table 제거.
             for table in tmpTables:
                 table.drop()
@@ -730,7 +759,7 @@ class DataBase:
             print('----------------')
             return True
         except Exception as e:
-            return e
+            raise e
 
 
 if __name__ == '__main__':

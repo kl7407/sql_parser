@@ -58,16 +58,25 @@ create table account (
 );
 insert into person values(1, 'Jhon', "M");
 insert into person values(2, 'Woo', "M");
-insert into account values(9732, 'Perryridge', "Jhon" ,1000);
-insert into account values(1, 'Perryridge', 'Woo', 12000);
+insert into person values(2, 'Woo2', "M");
+insert into person values(3, 'Woo3', 0);
+
+insert into account values(9732, 'Perryridge', 1 ,1000);
+insert into account values(1, 'Perryridge', 2, 12000);
 insert into account values(10, 'Perryridge', null, 1000);
 insert into account values(11, 'Perryridge', null, 1200);
-insert into account values(2, 'Seoul', 'Kim', 1200);
-insert into account values(3, 'Seoul', 'Kang', 1300);
-insert into account values(4, 'Seoul', 'Song', 1400);
+insert into account(account_number, person_id, assets, branch_name) values(200, null, null, null);
+insert into account(account_number, person_id, assets, branch_name, person_name) values(201, null, null, null, null);
+insert into account(account_number, person_id, assets, branch_name) values(null, null, null, null);
+insert into account(account_number, person_id, assets, branch_name) values(200, null, null, "SECOND");
+insert into account values(2, 'Seoul', 400, 1200);
+insert into account values(3, 'Seoul', 401, 1300);
+insert into account values(4, 'Seoul', 402, 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul', null, 1600);
-delete from account where (not branch_name = 'Perryridge') and ((person_name is null) or assets <= 1200);
+select * from account;select * from person;
+delete from account where (not branch_name = 'Perryridge') and ((person_id is null) or assets <= 1200);
+select * from account;select * from person;
 select *
     from account, person as student, person
     where account.account_number < 10 or person.assets = student.assets;

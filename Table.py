@@ -144,21 +144,52 @@ class Table:
             self.fKeys.append(newFKeyInfo)
             self.db.put(b'fKeys', str(self.fKeys))
 
+    def _getRefTableByName(self, tableName):
+        for table in self.refTables:
+            if table.name == tableName:
+                return table
+        return None
+
+    def _checkRefIntegConstraint(self, rowInfo: dict):
+        isAlright = True
+        for fKeyInfo in self.fKeys:
+            myColName = fKeyInfo['column']
+            refTableName = fKeyInfo['referredTableName']
+            refColName = fKeyInfo['referredColName']
+            refTable = self._getRefTableByName(refTableName)
+            if refTable is None:
+                raise SyntaxError
+            isIn = False
+            # Nullable 여부는 앞에서 체크하므로 여기서는 rowInfo value == Null 이면 값 비교 안하고 continue
+            if rowInfo[myColName]['value'] is None:
+                continue
+            for row in refTable.rows:
+                if row[refColName] == rowInfo[myColName]['value']:
+                    isIn = True
+                    break
+            if not isIn:
+                isAlright = False
+                break
+        return isAlright
+
     def addRow(self, rowInfo: dict):
         row = dict()
         for col in self.cols:
             data = rowInfo.setdefault(col.name, dict())
             # 해당 column 정보가 없을 경우
             if len(data.keys()) == 0 and col.isNotNull:
-                raise ValueError
+                raise InsertColumnNonNullableError(f"Insertion has failed: '[{col.name}]' is not nullable")
             # data type 이 안 맞을 경우
             if data.setdefault('type', None) != col.dataType:
-                raise ValueError
+                raise InsertTypeMismatchError('Insertion has failed: Types are not matched')
             # 해당 data 가 null 일 경우
             value = data.setdefault('value', None)
             if value is None and col.isNotNull:
-                raise ValueError
+                raise InsertColumnNonNullableError(f"Insertion has failed: '{col.name}' is not nullable")
             row[col.name] = value
+        # reference integrity constraint 확인
+        if not self._checkRefIntegConstraint(rowInfo):
+            raise InsertReferentialIntegrityError("Insertion has failed: Referential integrity violation")
         # private key인데 똑같은 key 조합이 있는지 확인
         isAlreadyExistPKey = False
         for existingRow in self.rows:
@@ -169,7 +200,7 @@ class Table:
                 isAlreadyExistPKey = True
                 break
         if isAlreadyExistPKey:
-            raise SyntaxError
+            raise InsertDuplicatePrimaryKeyError("Insertion has failed: Primary key duplication")
         keyStr = ''
         for pKey in self.pKeys:
             tmpKey = str(row[pKey.name])
@@ -329,5 +360,5 @@ class Table:
                             col.beReferredCnt -= 1
                             break
                     break
-        self.db.close()
+        self.closeFile()
         os.remove(f'./database/{self.name}.db')
