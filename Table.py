@@ -10,6 +10,10 @@ class Column:
         self.isNotNull = isNotNull
         self.maxLen = maxLen
         self.beReferredCnt = 0
+        self.label = name
+        self.hasLabel = False
+        # TODO: 현재 컬럼 이름을 바꿔서 select output 에 사용하는데, 이름을 바꾸는 게 아니라 label 을 추가해서 출력할 때 바꾸도록 해야함.
+        # TODO: 또한 현재 상태에서는 join 안 한 table에 select as 사용하면 column name 이 싹 바뀌는데 이것도 해결해야 함.
 
     def __str__(self):
         return f"{self.dataType}/{self.name}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
@@ -163,14 +167,28 @@ class Table:
             # Nullable 여부는 앞에서 체크하므로 여기서는 rowInfo value == Null 이면 값 비교 안하고 continue
             if rowInfo[myColName]['value'] is None:
                 continue
-            for row in refTable.rows:
-                if row[refColName] == rowInfo[myColName]['value']:
+            for refRow in refTable.rows:
+                if refRow[refColName] == rowInfo[myColName]['value']:
+                    refRow['_isReferred'] = refRow.setdefault('_isReferred', 0) + 1
                     isIn = True
                     break
             if not isIn:
                 isAlright = False
                 break
         return isAlright
+
+    def _getKeyStr(self, row: dict):
+        keyStr = ''
+        for pKey in self.pKeys:
+            tmpKey = str(row[pKey.name])
+            key = ''
+            for c in tmpKey:
+                if c == '/':
+                    key += '//'
+                else:
+                    key += c
+            keyStr += key + '/'
+        return keyStr
 
     def addRow(self, rowInfo: dict):
         row = dict()
@@ -201,17 +219,30 @@ class Table:
                 break
         if isAlreadyExistPKey:
             raise InsertDuplicatePrimaryKeyError("Insertion has failed: Primary key duplication")
-        keyStr = ''
-        for pKey in self.pKeys:
-            tmpKey = str(row[pKey.name])
-            key = ''
-            for c in tmpKey:
-                if c == '/':
-                    key += '//'
-                else:
-                    key += c
-            keyStr += key + '/'
+        keyStr = self._getKeyStr(row)
         self.rows.append(row)
+        self.db.put(keyStr.encode(), str(row))
+
+    def deleteRow(self, row):
+        self.db.delete(self._getKeyStr(row).encode())
+        self.rows.remove(row)
+        for fKeyInfo in self.fKeys:
+            myColName = fKeyInfo['column']
+            refTableName = fKeyInfo['referredTableName']
+            refColName = fKeyInfo['referredColName']
+            refTable = self._getRefTableByName(refTableName)
+            if refTable is None:
+                raise SyntaxError
+            if row[myColName] is None:
+                continue
+            for refRow in refTable.rows:
+                if refRow[refColName] == row[myColName]:
+                    refRow['_isReferred'] -= 1
+                    refTable.updateRowAtDB(refRow)
+                    break
+
+    def updateRowAtDB(self, row):
+        keyStr = self._getKeyStr(row)
         self.db.put(keyStr.encode(), str(row))
 
     def addOriginalTable(self, table):
@@ -239,6 +270,7 @@ class Table:
         return newTable
 
     def changeColName(self, originalName, newName):
+        # TODO! 뜯어고쳐야함.
         for i in range(len(self.cols)):
             col = self.cols[i]
             if col.name == originalName:
@@ -341,6 +373,9 @@ class Table:
         self.db.put(b'pKeys', dbLogStr)
 
         self.db.put(b'fKeys', str(self.fKeys))
+
+        for row in self.rows:
+            self.updateRowAtDB(row)
 
         self.db.close()
 

@@ -92,10 +92,10 @@ class DataBase:
     def _getOperandValue(self, query, row, tableName=None):
         assert query.data == 'comp_operand'
         element = query.children[0]
-        if element.data == 'comparable_value':
+        if type(element) == Tree and element.data == 'comparable_value':
             return self._getCompValue(element)
         # table name 이 있을 경우
-        elif element.data == 'table_name' or tableName is not None:
+        elif type(element) == Tree and (element.data == 'table_name' or tableName is not None):
             colName = element.children[0].value
             if element.data == 'table_name':
                 if tableName is None:
@@ -123,7 +123,7 @@ class DataBase:
             assert colWeWant is not None
             return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
         # table name 이 없을 경우
-        elif element.data == 'column_name':
+        elif type(element) == Tree and element.data == 'column_name':
             columnsWeWant = []
             for table in self.tables:
                 for tableCol in table.cols:
@@ -132,6 +132,9 @@ class DataBase:
             assert len(columnsWeWant) == 1
             colWeWant = columnsWeWant[0]
             return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
+        else:
+            # when null value
+            return {'type': 'NULL', 'value': None}
 
     def _predicate(self, query, row, tableName=None):
         assert query.data == 'predicate'
@@ -206,15 +209,30 @@ class DataBase:
             for factor in boolFactors:
                 boolTest = factor.children[-1]
                 tmpTF = True
+                # 그냥 join 에서 copm value 학인이므로
+                # null value 에 대해서는 항상 return False, 그리고 null value 가 있다는 걸 알려줘야 함.
                 if boolTest.children[0].data == 'predicate':
-                    tmpTF = self._predicate(boolTest.children[0], row, tableName)
+                    tmpQuery = boolTest.children[0]
+                    hasNone = False
+                    if tmpQuery.children[0].data == 'comparison_predicate':
+                        operand1 = self._getOperandValue(tmpQuery.children[0].children[0], row, tableName)
+                        operand2 = self._getOperandValue(tmpQuery.children[0].children[2], row, tableName)
+                        if (operand1['value'] is None) or (operand2['value'] is None):
+                            hasNone = True
+                    if hasNone:
+                        return False, 0
+                    else:
+                        tmpTF = self._predicate(boolTest.children[0], row, tableName)
                 elif boolTest.children[0].data == 'parenthesized_boolean_expr':
-                    tmpTF = self._parenthesizedBool(boolTest.children[0], row, tableName)
+                    tfInfo = self._parenthesizedBool(boolTest.children[0], row, tableName)
+                    if tfInfo[1] == 0:
+                        return tfInfo
+                    tmpTF = tfInfo[0]
                 if isinstance(factor.children[0], Token) and factor.children[0].type == 'NOT':
                     tmpTF = not tmpTF
                 andVal = andVal and tmpTF
             orVal = orVal or andVal
-        return orVal
+        return orVal, 1
 
     def _parenthesizedBool(self, query, row, tableName):
         boolExpression = query.children[1]
@@ -222,7 +240,7 @@ class DataBase:
 
     def _where(self, query, row, tableName=None):
         boolExpression = query.children[1]
-        return self._boolExpression(boolExpression, row, tableName)
+        return self._boolExpression(boolExpression, row, tableName)[0]
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
         while True:
@@ -570,20 +588,27 @@ class DataBase:
                 raise NoSuchTable("No such table")
             # 모든 row 를 삭제할 때
             cntDelete = 0
+            cntNotDelete = 0
+            shouldBeDeleted = []
             if len(deleteQuery.children) == 3:
-                cntDelete += len(table.rows)
-                table.rows = []
+                for row in table.rows:
+                    if row.setdefault('_isReferred', 0) != 0:
+                        cntNotDelete += 1
+                    else:
+                        cntDelete += 1
+                        shouldBeDeleted.append(row)
             # where 절이 있을 경우
             elif len(deleteQuery.children) == 4:
                 whereClauseTree = deleteQuery.children[3]
-                shouldBeDeleted = []
                 for row in table.rows:
                     if self._where(whereClauseTree, row, tableName):
                         shouldBeDeleted.append(row)
                 cntDelete += len(shouldBeDeleted)
                 for row in shouldBeDeleted:
-                    table.rows.remove(row)
+                    table.deleteRow(row)
             self._putInstruction(f"{cntDelete} row(s) are deleted")
+            if cntNotDelete != 0:
+                self._putInstruction(f"{cntNotDelete} row(s) are not deleted due to referential integrity")
             return True
         except Exception as e:
             raise e
@@ -665,8 +690,6 @@ class DataBase:
         return newTable
 
     def _select(self, query):
-        print('select started')
-
         def getTableList(inputQ):
             # select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
             referredTables = []
@@ -737,9 +760,45 @@ class DataBase:
                 for row in tableWeWant.rows:
                     if self._where(whereClause, row, tableWeWant.name):
                         rowsWeWant.append(row)
-            # DO SOMETHING
+
+            # 출력 양식을 위한 함수들.
+            def getTabSize(n: int):
+                return max(((n - 1) // 4) * 4, 16)
+
+            def printRow(row: dict, tabSizeInfo: list):
+                logStr = '|'
+                for i in range(len(tableWeWant.cols)):
+                    tabSize = tabSizeInfo[i]
+                    colName = tableWeWant.cols[i].name
+                    data = str(row[colName])
+                    logStr += f' {data}{" "*(tabSize - len(data))} |'
+                print(logStr)
+
+            maxLenInfo = []
+            for col in tableWeWant.cols:
+                maxLenInfo.append(len(col.label))
             for row in rowsWeWant:
-                print(row)
+                for i in range(len(tableWeWant.cols)):
+                    col = tableWeWant.cols[i]
+                    dataLen = len(str(row[col.name]))
+                    if maxLenInfo[i] < dataLen:
+                        maxLenInfo[i] = dataLen
+            tabSizeInfo = []
+            for n in maxLenInfo:
+                tabSizeInfo.append(getTabSize(n))
+            border = '+'
+            colNameLogStr = '|'
+            for i in range(len(tableWeWant.cols)):
+                tabSize = tabSizeInfo[i]
+                colName = tableWeWant.cols[i].name
+                border += f"-{'-'*tabSize}-+"
+                colNameLogStr += f' {colName}{" " * (tabSize - len(colName))} |'
+            print(border)
+            print(colNameLogStr)
+            print(border)
+            for row in rowsWeWant:
+                printRow(row, tabSizeInfo)
+            print(border)
             # 중간에 join 되었던 table 제거.
             for table in tmpTables:
                 table.drop()

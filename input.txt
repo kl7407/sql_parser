@@ -58,24 +58,33 @@ create table account (
 );
 insert into person values(1, 'Jhon', "M");
 insert into person values(2, 'Woo', "M");
+
 insert into person values(2, 'Woo2', "M");
 insert into person values(3, 'Woo3', 0);
+insert into person(person_name, sex, person_id) values(400, 'Woo', 'M');
+
+insert into person(person_name, sex, person_id) values('Kim', 'W', 401 );
+insert into person(person_name, sex, person_id) values('Kim', 'M', 402);
+insert into person(person_name, sex, person_id) values('Song', 'W', 403);
 
 insert into account values(9732, 'Perryridge', 1 ,1000);
 insert into account values(1, 'Perryridge', 2, 12000);
 insert into account values(10, 'Perryridge', null, 1000);
 insert into account values(11, 'Perryridge', null, 1200);
-insert into account(account_number, person_id, assets, branch_name) values(200, null, null, null);
+insert into account(account_number, person_id, assets, branch_name) values(200, null, 5000, null);
+
 insert into account(account_number, person_id, assets, branch_name, person_name) values(201, null, null, null, null);
 insert into account(account_number, person_id, assets, branch_name) values(null, null, null, null);
-insert into account(account_number, person_id, assets, branch_name) values(200, null, null, "SECOND");
+insert into account(account_number, person_id, assets, branch_name) values(200, null, null, "should_be_error");
 insert into account values(2, 'Seoul', 400, 1200);
+
 insert into account values(3, 'Seoul', 401, 1300);
 insert into account values(4, 'Seoul', 402, 1400);
 insert into account values(5, 'Seoul', null, 1500);
-insert into account values(6, 'Seoul', null, 1600);
-select * from account;select * from person;
-delete from account where (not branch_name = 'Perryridge') and ((person_id is null) or assets <= 1200);
+insert into account values(6, 'Seoul2', null, 1600);
+select * from account;
+delete from person;
+delete from account where (not branch_name = 'Perryridge') and ((person_id is null) or assets <= 1300);
 select * from account;select * from person;
 select *
     from account, person as student, person
