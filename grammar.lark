@@ -107,6 +107,7 @@ predicate : comparison_predicate
 comparison_predicate : comp_operand COMP_OP comp_operand
 comp_operand : comparable_value
              | [table_name "."] column_name
+             | NULL
 comparable_value : INT | STR | DATE
 null_predicate : [table_name "."] column_name null_operation
 null_operation : IS [NOT] NULL
