@@ -609,8 +609,8 @@ class DataBase:
                     if self._where(whereClauseTree, row, tableName):
                         shouldBeDeleted.append(row)
                 cntDelete += len(shouldBeDeleted)
-                for row in shouldBeDeleted:
-                    table.deleteRow(row)
+            for row in shouldBeDeleted:
+                table.deleteRow(row)
             self._putInstruction(f"{cntDelete} row(s) are deleted")
             if cntNotDelete != 0:
                 self._putInstruction(f"{cntNotDelete} row(s) are not deleted due to referential integrity")
