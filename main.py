@@ -653,7 +653,6 @@ class DataBase:
                 newTable.rows.append(newRow)
         newTable.addOriginalTable(table1)
         newTable.addOriginalTable(table2)
-
         return newTable
 
     def _select(self, query):

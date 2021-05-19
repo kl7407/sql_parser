@@ -320,7 +320,7 @@ class Table:
         for row in self.rows:
             newRow = dict()
             for col in self.cols:
-                newRow[f'{alias}.{col.name}'] = row[f'{self.name}.{col.name}']
+                newRow[f'{alias}.{col.name}'] = row[{col.name}]
             newTable.rows.append(newRow)
         return newTable
 
