@@ -83,6 +83,7 @@ insert into account values(4, 'Seoul', 402, 1400);
 insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul2', null, 1600);
 select * from account;
+select * from person;
 delete from person;
 delete from account where (not branch_name = 'Perryridge') and ((person_id is null) or assets <= 1300);
 select * from account;select * from person;

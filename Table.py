@@ -4,28 +4,30 @@ from errors import *
 
 
 class Column:
-    def __init__(self, dataType: str, name: str, maxLen=1000, isNotNull=False):
+    def __init__(self, dataType: str, name: str, label: str, maxLen=1000, isNotNull=False):
         self.dataType = dataType
-        self.name = name
-        self.isNotNull = isNotNull
+        self.name = name  # 모든 column 의 이름이 다름.
+        self.label = label
         self.maxLen = maxLen
+        self.isNotNull = isNotNull
         self.beReferredCnt = 0
-        self.label = name
-        self.hasLabel = False
         # TODO: 현재 컬럼 이름을 바꿔서 select output 에 사용하는데, 이름을 바꾸는 게 아니라 label 을 추가해서 출력할 때 바꾸도록 해야함.
-        # TODO: 또한 현재 상태에서는 join 안 한 table에 select as 사용하면 column name 이 싹 바뀌는데 이것도 해결해야 함.
+        # TODO: 또한 현재 상태에서는 join 안 한 table 에 select as 사용하면 column name 이 싹 바뀌는데 이것도 해결해야 함.
 
     def __str__(self):
-        return f"{self.dataType}/{self.name}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
+        return f"{self.dataType}/{self.name}/{self.label}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
 
-    def copy(self, name=None):
+    def copy(self, name=None, label=None):
         if name is None:
             name = self.name
-        return Column(self.dataType, name, self.maxLen, self.isNotNull)
+        if label is None:
+            label = self.label
+        return Column(dataType=self.dataType, name=name, maxLen=self.maxLen, isNotNull=self.isNotNull,
+                      label=label)
 
 
 class Table:
-    def __init__(self, name: str):
+    def __init__(self, name: str, initDB=True):
         self.name = name
         self.cols = []
         self.rows = []
@@ -33,10 +35,14 @@ class Table:
         self.didSetPKeys = False
         self.fKeys = []
         self.refTables = []
-        self.originalTables = [] # for join
-        self.originalColNames = [] # for join
-        self.db = db.DB()
+        self.originalTables = []  # for join
+        self.db = None
         self.filePath = f'./database/{self.name}.db'
+        if initDB:
+            self.initDBFile()
+
+    def initDBFile(self):
+        self.db = db.DB()
         self.db.open(self.filePath, dbtype=db.DB_HASH, flags=db.DB_CREATE)
         if not self.db.get(b'cols'):
             self.db.put(b'cols', str(self.cols))
@@ -57,7 +63,8 @@ class Table:
             dbLogStr += str(col) + ', '
         dbLogStr = dbLogStr[:-2]
         dbLogStr += ']'
-        self.db.put(b'cols', dbLogStr)
+        if self.db is not None:
+            self.db.put(b'cols', dbLogStr)
 
     def setPrimaryKey(self, colName: str):
         # 이전에 primary key 설정한 적이 있으면 에러 일으킴.
@@ -71,7 +78,9 @@ class Table:
                 for pKey in self.pKeys:
                     if pKey.name == colName:
                         self.drop()
-                        raise DuplicatePrimaryKeyDefError('Create table has failed: primary key definition is duplicated')
+                        raise DuplicatePrimaryKeyDefError(
+                            'Create table has failed: primary key definition is duplicated'
+                        )
                 # primary key 는 자동적으로 not null
                 col.isNotNull = True
                 self.pKeys.append(col)
@@ -80,7 +89,8 @@ class Table:
                     dbLogStr += str(pKey) + ', '
                 dbLogStr = dbLogStr[:-2]
                 dbLogStr += ']'
-                self.db.put(b'pKeys', dbLogStr)
+                if self.db is not None:
+                    self.db.put(b'pKeys', dbLogStr)
                 return
         self.drop()
         raise NonExistingColumnDefError(f"Create table has failed: '{colName}' does not exists in column definition")
@@ -102,14 +112,20 @@ class Table:
         for referredColName in refPKeyNameList:
             if referredColName not in realRefColNameList:
                 self.drop()
-                raise ReferenceColumnExistenceError('Create table has failed: foreign key references non existing column')
+                raise ReferenceColumnExistenceError(
+                    'Create table has failed: foreign key references non existing column'
+                )
             if referredColName not in realRefPKeyNameList:
                 self.drop()
-                raise ReferenceNonPrimaryKeyError('Create table has failed: foreign key references non primary key column')
+                raise ReferenceNonPrimaryKeyError(
+                    'Create table has failed: foreign key references non primary key column'
+                )
         for pKeyName in realRefPKeyNameList:
             if pKeyName not in refPKeyNameList:
                 self.drop()
-                raise ReferenceNonPrimaryKeyError('Create table has failed: foreign key references non primary key column')
+                raise ReferenceNonPrimaryKeyError(
+                    'Create table has failed: foreign key references non primary key column'
+                )
 
         for i in range(len(refPKeyNameList)):
             colName = myFKeyNameList[i]
@@ -146,7 +162,8 @@ class Table:
             refCol.beReferredCnt += 1
             self.refTables.append(referredTable)
             self.fKeys.append(newFKeyInfo)
-            self.db.put(b'fKeys', str(self.fKeys))
+            if self.db is not None:
+                self.db.put(b'fKeys', str(self.fKeys))
 
     def _getRefTableByName(self, tableName):
         for table in self.refTables:
@@ -154,7 +171,7 @@ class Table:
                 return table
         return None
 
-    def _checkRefIntegConstraint(self, rowInfo: dict):
+    def _checkRefIntegrityConstraint(self, rowInfo: dict):
         isAlright = True
         for fKeyInfo in self.fKeys:
             myColName = fKeyInfo['column']
@@ -164,11 +181,13 @@ class Table:
             if refTable is None:
                 raise SyntaxError
             isIn = False
+            fieldValue = rowInfo[f'{myColName}']['value']
             # Nullable 여부는 앞에서 체크하므로 여기서는 rowInfo value == Null 이면 값 비교 안하고 continue
-            if rowInfo[myColName]['value'] is None:
+            if fieldValue is None:
                 continue
             for refRow in refTable.rows:
-                if refRow[refColName] == rowInfo[myColName]['value']:
+                refFieldValue = refRow[refColName]
+                if refFieldValue == fieldValue:
                     refRow['_isReferred'] = refRow.setdefault('_isReferred', 0) + 1
                     isIn = True
                     break
@@ -196,24 +215,26 @@ class Table:
             data = rowInfo.setdefault(col.name, dict())
             # 해당 column 정보가 없을 경우
             if len(data.keys()) == 0 and col.isNotNull:
-                raise InsertColumnNonNullableError(f"Insertion has failed: '[{col.name}]' is not nullable")
+                raise InsertColumnNonNullableError(
+                    f"Insertion has failed: '[{col.label}]' is not nullable")
             # data type 이 안 맞을 경우
             if data.setdefault('type', None) != col.dataType:
                 raise InsertTypeMismatchError('Insertion has failed: Types are not matched')
             # 해당 data 가 null 일 경우
             value = data.setdefault('value', None)
             if value is None and col.isNotNull:
-                raise InsertColumnNonNullableError(f"Insertion has failed: '{col.name}' is not nullable")
+                raise InsertColumnNonNullableError(f"Insertion has failed: '{col.label}' is not nullable")
             row[col.name] = value
         # reference integrity constraint 확인
-        if not self._checkRefIntegConstraint(rowInfo):
+        if not self._checkRefIntegrityConstraint(rowInfo):
             raise InsertReferentialIntegrityError("Insertion has failed: Referential integrity violation")
-        # private key인데 똑같은 key 조합이 있는지 확인
+        # private key 인데 똑같은 key 조합이 있는지 확인
         isAlreadyExistPKey = False
         for existingRow in self.rows:
             isSamePKey = True
             for pKey in self.pKeys:
-                isSamePKey &= existingRow[pKey.name] == row[pKey.name]
+                fieldKey = pKey.name
+                isSamePKey &= existingRow[fieldKey] == row[fieldKey]
             if isSamePKey:
                 isAlreadyExistPKey = True
                 break
@@ -221,7 +242,8 @@ class Table:
             raise InsertDuplicatePrimaryKeyError("Insertion has failed: Primary key duplication")
         keyStr = self._getKeyStr(row)
         self.rows.append(row)
-        self.db.put(keyStr.encode(), str(row))
+        if self.db is not None:
+            self.db.put(keyStr.encode(), str(row))
 
     def deleteRow(self, row):
         self.db.delete(self._getKeyStr(row).encode())
@@ -243,7 +265,8 @@ class Table:
 
     def updateRowAtDB(self, row):
         keyStr = self._getKeyStr(row)
-        self.db.put(keyStr.encode(), str(row))
+        if self.db is not None:
+            self.db.put(keyStr.encode(), str(row))
 
     def addOriginalTable(self, table):
         if len(table.originalTables) == 0:
@@ -252,69 +275,63 @@ class Table:
             for originalTable in table.originalTables:
                 self.originalTables.append(originalTable)
 
-    def copy(self, alias):
-        if alias is None:
+    def findColWithOriginalTableName(self, colName):
+        outputs = []
+        for originalTable in self.originalTables:
+            for col in originalTable.cols:
+                if colName == f'{originalTable.name}.{col.name}':
+                    outputs.append(col)
+        cnt = len(outputs)
+        if cnt == 0:
+            return None
+        elif cnt == 1:
+            return outputs[0]
+        else:
             raise SyntaxError
-        newTable = Table(alias)
+
+    def copy(self, alias):
+        # join 에서 가명으로 불릴 때를 위해 사용함. 임시로 사용되는 것이므로 db file 만들 필요 없음(self.initDBFile() X).
+        if (alias is None) or (type(alias) is not str):
+            raise SyntaxError
+        newTable = Table(alias, False)
         # isReferred = False 로 만들기 위해.
         for col in self.cols:
-            newTable.cols.append(col.copy())
+            newTable.cols.append(col.copy(name=f'{alias}.{col.name}'))
         # pKeys 에 들어가는 건 cols 에 있는 것과 똑같은 객체이므로.
         for pKey in self.pKeys:
             for col in newTable.cols:
                 if col.name == pKey.name:
-                    newTable.pKeys.append(col)
+                    newTable.setPrimaryKey(f'{alias}.{col.name}')
                     break
-        newTable.fKeys = self.fKeys
-        newTable.rows = self.rows
+        newTable.didSetPKeys = True
+
+        for fKey in self.fKeys:
+            newFKey = dict()
+            newFKey['column'] = f"{alias}.{fKey['column']}"
+            newFKey['referredTableName'] = fKey['referredTableName']
+            newFKey['referredColName'] = fKey['referredColName']
+            newTable.fKeys.append(newFKey)
+        newTable.rows = []
+        for refTable in self.refTables:
+            newTable.refTables.append(refTable)
+        for ori in self.originalTables:
+            newTable.originalTables.append(ori)
+
+        for row in self.rows:
+            newRow = dict()
+            for col in self.cols:
+                newRow[f'{alias}.{col.name}'] = row[f'{self.name}.{col.name}']
+            newTable.rows.append(newRow)
         return newTable
 
-    def changeColName(self, originalName, newName):
-        # TODO! 뜯어고쳐야함.
+    # select 에서 출력될 때 어떤 명칭으로 불릴 것인지를 정함. as 때문에 필요
+    def setColLabel(self, originalLabel, newLabel):
         for i in range(len(self.cols)):
             col = self.cols[i]
-            if col.name == originalName:
-                # 먼저 다른 컬럼이랑 이름이 중복되지 않아야 함.
-                for j in range(len(self.cols)):
-                    if i == j:
-                        continue
-                    elif newName == self.cols[j].name:
-                        return False
-                col.name = newName
-                self.originalColNames.append({'originalName': originalName, 'newName': newName})
-                for row in self.rows:
-                    row[newName] = row[originalName]
-                    del row[originalName]
+            if col.label == originalLabel:
+                col.label = newLabel
                 return True
         return False
-
-    def _getNewName(self, originalName):
-        for history in self.originalColNames:
-            if history['originalName'] == originalName:
-                return history['newName']
-        return None
-
-    # as 때문에 col 이름이 바뀌었을 때 해당 항목을 찾아주는.
-    def findColName(self, colName):
-        output = colName
-        isIn = False
-        while not isIn:
-            assert output is not None
-            for col in self.cols:
-                if col.name == output:
-                    return col.name
-            if not isIn:
-                nextValue = self._getNewName(output)
-                if nextValue is None:
-                    splited = output.split('.')
-                    for col in self.cols:
-                        if col.name == splited[-1]:
-                            return col.name
-
-                    if len(splited) != 1:
-                        nextValue = self._getNewName(splited[-1])
-                output = nextValue
-        return output
 
     def showInfo(self):
         maxLen = 0
@@ -324,9 +341,9 @@ class Table:
 
         colInfos = []
         for col in self.cols:
-            nameLen = len(col.name)
-            if maxLen < nameLen:
-                maxLen = nameLen
+            labelLen = len(col.label)
+            if maxLen < labelLen:
+                maxLen = labelLen
             dataType = col.dataType
             if dataType == 'char':
                 dataType = f'char({col.maxLen})'
@@ -351,13 +368,15 @@ class Table:
         for i in range(len(self.cols)):
             col = self.cols[i]
             colInfo = colInfos[i]
-            tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(col.name)
-            tabbedName = col.name + ' ' * tabSize
+            tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(col.label)
+            tabbedName = col.label + ' ' * tabSize
             print(f'{tabbedName}{colInfo}')
         print('-------------------------------------------------')
 
     # db file close
     def closeFile(self):
+        if self.db is None:
+            return
         dbLogStr = '['
         for col in self.cols:
             dbLogStr += str(col) + ', '
