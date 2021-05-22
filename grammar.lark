@@ -14,7 +14,7 @@ SQ : "'"
 // Tokens
 STR : DQ _STRING_ESC_INNER DQ | SQ _STRING_ESC_INNER SQ
 DATE.9 : N N N N "-" N N "-" N N
-IDENTIFIER : C (C | "_")*
+IDENTIFIER : C (C | "_" | N)*
 
 // Keywords
 TYPE_INT : "int"i
