@@ -7,6 +7,17 @@ with open('grammar.lark') as file:
     sql_parser = Lark(fileInfo, start="command", lexer="standard")
 
 
+def isEndWith(colName, tableColName):
+    isEndWithColName = True
+    colNameParsed = colName.split(".")
+    tableColNameParsed = tableColName.split('.')
+    if len(colNameParsed) > len(tableColNameParsed):
+        isEndWithColName = False
+    for i in range(len(colNameParsed)):
+        isEndWithColName &= colNameParsed[-(i + 1)] == tableColNameParsed[-(i + 1)]
+    return isEndWithColName
+
+
 class DataBase:
     prompt = 'DB_2016-15827> '
 
@@ -36,8 +47,15 @@ class DataBase:
                 if len(colInfoRaw) != 0:
                     for info in colInfoRaw.split(', '):
                         parsedInfo = info.split('/')
-                        newCol = Column(parsedInfo[0], parsedInfo[1], parsedInfo[2],
-                                        int(parsedInfo[3]), parsedInfo[4] == 'True')
+                        colDataType = parsedInfo[0]
+                        colName = parsedInfo[1]
+                        colLabel = parsedInfo[2]
+                        if colLabel == "":
+                            colLabel = None
+                        colMaxLen = int(parsedInfo[3])
+                        colIsNotNull = parsedInfo[4] == "True"
+                        newCol = Column(colDataType, colName, colLabel,
+                                        colMaxLen, colIsNotNull)
                         newCol.beReferredCnt = int(parsedInfo[5])
                         newTable.addCol(newCol)
 
@@ -70,6 +88,8 @@ class DataBase:
                 refTable = self.getTable(refTableName)
                 if refTable not in table.refTables:
                     table.refTables.append(refTable)
+                if table not in refTable.refMeTables:
+                    refTable.refMeTables.append(table)
 
     def getTable(self, tableName):
         for table in self.tables:
@@ -89,50 +109,88 @@ class DataBase:
         else:
             raise SyntaxError
 
-    def _getOperandValue(self, query, row, tableName=None):
+    def _getOperandValue(self, query, row, tableName):
         assert query.data == 'comp_operand'
         element = query.children[0]
+        # table 값이 아니라 constant 일 경우.
         if type(element) == Tree and element.data == 'comparable_value':
             return self._getCompValue(element)
-        # table name 이 있을 경우
-        elif type(element) == Tree and (element.data == 'table_name' or tableName is not None):
-            colName = element.children[0].value
+        # table 값이고 table name 이 있을 경우
+        elif type(element) == Tree and element.data == 'table_name':
+            colName = query.children[1].children[0].value
             if element.data == 'table_name':
-                if tableName is None:
-                    tableName = element.children[0].value
-                    label = query.children[1].children[0].value
-                    colName = f'{tableName}.{label}'
-                else:
-                    # select 에서 사용될 때이므로 원래 table 명을 column name 에 붙여줌
-                    colName = element.children[0].value + '.' + query.children[1].children[0].value
-            elif element.data == 'column_name':
-                colName = f'{tableName}.{colName}'
+                # select 에서 사용될 때이므로 원래 table 명을 column name 에 붙여줌
+                originalTableName = element.children[0].value
+                colName = f'{originalTableName}.{colName}'
             table = None
             for t in self.tables:
                 if t.name == tableName:
                     table = t
                     break
-            assert table is not None
-            colWeWant = None
+            if table is None:
+                raise TableExistenceError("No such table")
+
+            colsWeWant = []
             for tableCol in table.cols:
-                if colName == tableCol.name:
-                    colWeWant = tableCol
-            if colWeWant is None:
-                colWeWant = table.findColWithOriginalTableName(colName)
-            assert colWeWant is not None
-            return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
-        # table name 이 없을 경우
+                if isEndWith(colName, tableCol.name):
+                    colsWeWant.append(tableCol)
+            if len(colsWeWant) == 0:
+                # 다른 테이블에 있는 column name_인지 확인.
+                isInOtherTable = False
+                for tmpTable in self.tables:
+                    for tableCol in tmpTable.cols:
+                        if isEndWith(colName, tableCol.name):
+                            isInOtherTable = True
+                            break
+                if isInOtherTable:
+                    raise WhereTableNotSpecified("Where clause try to reference tables which are not specified")
+                else:
+                    # 애초에 없는 테이블일 경우
+                    raise WhereColumnNotExist("Where clause try to reference non existing column")
+            elif len(colsWeWant) > 1:
+                # column_이 하나로 특정되지 않을 경우
+                raise WhereAmbiguousReference("Where clause contains ambiguous reference")
+            if row == "dummy_data":
+                return
+            return {'type': colsWeWant[0].dataType, 'value': row[colsWeWant[0].name]}
+        # table 값인데 table name 이 없을 경우
         elif type(element) == Tree and element.data == 'column_name':
+            table = None
+            for t in self.tables:
+                if t.name == tableName:
+                    table = t
+                    break
+            if table is None:
+                raise TableExistenceError("No such table")
+            colNameWeWantToFind = element.children[0].value
             columnsWeWant = []
-            for table in self.tables:
+            # label 먼저 확인
+            for tableCol in table.cols:
+                if tableCol.label == colNameWeWantToFind:
+                    columnsWeWant.append(tableCol)
+            if len(columnsWeWant) == 0:
                 for tableCol in table.cols:
-                    if tableCol.name == element.children[0].value:
+                    if isEndWith(colNameWeWantToFind, tableCol.name):
                         columnsWeWant.append(tableCol)
-            assert len(columnsWeWant) == 1
+
+            if len(columnsWeWant) > 1:
+                raise WhereAmbiguousReference("Where clause contains ambiguous reference")
+            elif len(columnsWeWant) == 0:
+                # 다른 테이블에 있는 column name_인지 확인.
+                for tmpTable in self.tables:
+                    for tableCol in tmpTable.cols:
+                        if isEndWith(colNameWeWantToFind, tableCol.name):
+                            raise WhereTableNotSpecified("Where clause try to reference tables which are not specified")
+                # 애초에 없는 테이블일 경우
+                raise WhereColumnNotExist("Where clause try to reference non existing column")
+            if row == "dummy_data":
+                return
             colWeWant = columnsWeWant[0]
             return {'type': colWeWant.dataType, 'value': row[colWeWant.name]}
         else:
             # when null value
+            if row == "dummy_data":
+                return
             return {'type': 'NULL', 'value': None}
 
     def _predicate(self, query, row, tableName=None):
@@ -140,8 +198,14 @@ class DataBase:
         if query.children[0].data == 'comparison_predicate':
             operand1 = self._getOperandValue(query.children[0].children[0], row, tableName)
             operand2 = self._getOperandValue(query.children[0].children[2], row, tableName)
+            if row == "dummy_data":
+                return
+            if operand1["value"] is None or operand2["value"] is None:
+                return "unknown"
             op = query.children[0].children[1]
-            assert operand1['type'] == operand2['type']
+            # 타입이 다를 경우 에러 발생
+            if operand1['type'] != operand2['type']:
+                raise WhereIncomparableError("Where clause try to compare incomparable values")
             if op == '<':
                 return operand1['value'] < operand2['value']
             elif op == '>':
@@ -184,7 +248,12 @@ class DataBase:
                     if col.name == colName:
                         colsWeWant.append(col)
                         break
-            assert len(colsWeWant) == 1
+            if len(colsWeWant) > 1:
+                raise WhereAmbiguousReference("Where clause contains ambiguous reference")
+            if len(colsWeWant) == 0:
+                raise WhereColumnNotExist("Where clause try to reference non existing column")
+            if row == "dummy_data":
+                return
             colWeWant = colsWeWant[0]
             nullOperationTree = nullPredicateTree.children[1]
             if len(nullOperationTree.children) == 3:
@@ -211,37 +280,46 @@ class DataBase:
                 boolTest = factor.children[-1]
                 tmpTF = True
                 # 그냥 join 에서 comp value 학인이므로
-                # null value 에 대해서는 항상 return False, 그리고 null value 가 있다는 걸 알려줘야 함.
+                # null value 에 대해서는 항상 return False, 그리고 not condition 일수도 있으므로 null value 가 있다는 걸 알려줘야 함.
                 if boolTest.children[0].data == 'predicate':
-                    tmpQuery = boolTest.children[0]
-                    hasNone = False
-                    if tmpQuery.children[0].data == 'comparison_predicate':
-                        operand1 = self._getOperandValue(tmpQuery.children[0].children[0], row, tableName)
-                        operand2 = self._getOperandValue(tmpQuery.children[0].children[2], row, tableName)
-                        if (operand1['value'] is None) or (operand2['value'] is None):
-                            hasNone = True
-                    if hasNone:
-                        return False, 0
-                    else:
-                        tmpTF = self._predicate(boolTest.children[0], row, tableName)
+                    tmpTF = self._predicate(boolTest.children[0], row, tableName)
                 elif boolTest.children[0].data == 'parenthesized_boolean_expr':
                     tfInfo = self._parenthesizedBool(boolTest.children[0], row, tableName)
-                    if tfInfo[1] == 0:
-                        return tfInfo
-                    tmpTF = tfInfo[0]
+                    tmpTF = tfInfo
+                # dummy_data 일 경우 그냥 return
+                if row == "dummy_data":
+                    return
+                # not 일 경우 바꿔줌.
                 if isinstance(factor.children[0], Token) and factor.children[0].type == 'NOT':
-                    tmpTF = not tmpTF
-                andVal = andVal and tmpTF
-            orVal = orVal or andVal
-        return orVal, 1
+                    if type(tmpTF) == bool:
+                        tmpTF = not tmpTF
+                # unknown 처리
+                if type(tmpTF) == bool and type(andVal) == bool:
+                    andVal = andVal and tmpTF
+                else:
+                    andVal = 'unknown'
+            if type(orVal) == bool and type(andVal) == bool:
+                orVal = orVal or andVal
+            else:
+                if orVal == 'unknown' and andVal == 'unknown':
+                    orVal = 'unknown'
+                elif orVal == 'unknown':
+                    if andVal:
+                        orVal = True
+                    else:
+                        orVal = 'unknown'
+                else:
+                    if not orVal:
+                        orVal = 'unknown'
+        return orVal
 
     def _parenthesizedBool(self, query, row, tableName):
         boolExpression = query.children[1]
         return self._boolExpression(boolExpression, row, tableName)
 
-    def _where(self, query, row, tableName=None):
+    def _where(self, query, row, tableName):
         boolExpression = query.children[1]
-        return self._boolExpression(boolExpression, row, tableName)[0]
+        return self._boolExpression(boolExpression, row, tableName)
 
     def getUserInput(self, isTest=False, testFile='input.txt'):
         while True:
@@ -252,6 +330,8 @@ class DataBase:
             userInputList = userInput.lower().strip().split(';')
             for i in range(len(userInputList)):
                 tmpInput = userInputList[i]
+                if tmpInput.strip() == '':
+                    continue
                 if i is not len(userInputList) - 1:
                     tmpInput += ';'
                 try:
@@ -291,7 +371,7 @@ class DataBase:
                                 self._putInstruction(str(e))
                             else:
                                 if isTest:
-                                    print(e)
+                                    raise e
                                 self._putInstruction('Syntax error')
                 except Exception as e:
                     if tmpInput.strip() == 'exit;':
@@ -301,7 +381,7 @@ class DataBase:
                         return
                     else:
                         if isTest:
-                            print(e)
+                            raise e
                         self._putInstruction('Syntax error')
 
     '''
@@ -354,7 +434,7 @@ class DataBase:
                         newTable.drop()
                         raise CharLengthError('Char length should be over 0')
                     newTable.addCol(Column(dataType=columnDataType, name=f'{newTable.name}.{columnLabel}',
-                                           label=columnLabel, maxLen=columnMaxLen, isNotNull=isNotNull))
+                                           label=None, maxLen=columnMaxLen, isNotNull=isNotNull))
 
                 elif elementTree.children[0].data == 'table_constraint_definition':
                     constraintTree = elementTree.children[0]
@@ -469,7 +549,7 @@ class DataBase:
                     table = t
                     break
             if table is None:
-                raise SyntaxError
+                raise NoSuchTable("No such table")
 
             colData = []
             # column name list 가 있을 때
@@ -485,7 +565,9 @@ class DataBase:
                        valTokenList[1].type == 'LP' and valTokenList[len(valTokenList) - 1].type == 'RP'
                 colTreeList = colTokenList[1:len(colTokenList) - 1]
                 valTreeList = valTokenList[2:len(valTokenList) - 1]
-                assert len(colTreeList) == len(valTreeList)
+                # column name 개수, column value 개수가 다르면 raise error
+                if len(colTreeList) != len(valTreeList):
+                    raise InsertTypeMismatchError("Insertion has failed: Types are not matched")
                 for i in range(len(colTreeList)):
                     colTree = colTreeList[i]
                     valTree = valTreeList[i]
@@ -518,7 +600,9 @@ class DataBase:
                 assert valTokenList[0].type == 'VALUES' and \
                        valTokenList[1].type == 'LP' and valTokenList[len(valTokenList) - 1].type == 'RP'
                 valTreeList = valTokenList[2:len(valTokenList) - 1]
-                assert len(table.cols) == len(valTreeList)
+                # 개수가 다르면 raise error
+                if len(table.cols) != len(valTreeList):
+                    raise InsertTypeMismatchError("Insertion has failed: Types are not matched")
                 for i in range(len(table.cols)):
                     valTree = valTreeList[i]
                     assert valTree.data == 'value'
@@ -543,6 +627,9 @@ class DataBase:
                     colData.append(data)
             else:
                 raise SyntaxError
+            # insert 하려는 data 개수와 table column 개수가 다르면 에러
+            if len(colData) != len(table.cols):
+                raise InsertTypeMismatchError("Insertion has failed: Types are not matched")
             rowInfo = dict()
             for data in colData:
                 idx = -1
@@ -553,7 +640,7 @@ class DataBase:
                         break
                 if idx == -1:
                     raise InsertColumnExistenceError(
-                        f"Insertion has failed: '{data['column_name'][len(tableName)+1:]}' does not exist"
+                        f"Insertion has failed: '{data['column_name'][len(tableName) + 1:]}' does not exist"
                     )
                 col = table.cols[idx]
                 if data['type'] == 'NULL':
@@ -569,6 +656,7 @@ class DataBase:
                             return 'date'
                         else:
                             raise SyntaxError
+
                     # error 판단 부분 Table class 에서 처리하는 걸로 바뀜.
                     rowInfo[col.name] = {'type': converter(data['type']), 'value': data['value']}
             table.addRow(rowInfo)
@@ -594,23 +682,23 @@ class DataBase:
             # 모든 row 를 삭제할 때
             cntDelete = 0
             cntNotDelete = 0
-            shouldBeDeleted = []
+            maybeDeleted = []
             if len(deleteQuery.children) == 3:
                 for row in table.rows:
-                    if row.setdefault('_isReferred', 0) != 0:
-                        cntNotDelete += 1
-                    else:
-                        cntDelete += 1
-                        shouldBeDeleted.append(row)
+                    maybeDeleted.append(row)
             # where 절이 있을 경우
             elif len(deleteQuery.children) == 4:
                 whereClauseTree = deleteQuery.children[3]
+                # row_가 하나도 없을 때 WhereColumnNotExist, WhereAmbiguousReference 체크하기 위해 필요함.
+                self._where(whereClauseTree, "dummy_data", tableName)
                 for row in table.rows:
-                    if self._where(whereClauseTree, row, tableName):
-                        shouldBeDeleted.append(row)
-                cntDelete += len(shouldBeDeleted)
-            for row in shouldBeDeleted:
-                table.deleteRow(row)
+                    if self._where(whereClauseTree, row, tableName) == True:
+                        maybeDeleted.append(row)
+            for row in maybeDeleted:
+                if table.deleteRow(row):
+                    cntDelete += 1
+                else:
+                    cntNotDelete += 1
             self._putInstruction(f"{cntDelete} row(s) are deleted")
             if cntNotDelete != 0:
                 self._putInstruction(f"{cntNotDelete} row(s) are not deleted due to referential integrity")
@@ -621,20 +709,28 @@ class DataBase:
     def _join_helper(self, table1: Table, table2: Table, tableName: str):
         """
         테이블 가명은 이미 다 적용된 상태.
-
-        :param asInfo: [{ 'tableName': str, 'colName': str, 'newName': str}, ...]
         :return: Table
         """
         if tableName is None:
-            tableName = f'_joined_{table1.name}_{table2.name}'
+            table1Name = table1.name
+            if table1Name.startswith("_joined_"):
+                table1Name = table1Name[len('_joined_'):]
+            table2Name = table2.name
+            if table2Name.startswith("_joined_"):
+                table2Name = table2Name[len('_joined_'):]
+            tableName = f'_joined_{table1Name},{table2Name}'
         newTable = Table(tableName, False)
         for col in table1.cols:
             colName = col.name
+            if table1.name.startswith('_joined_'):
+                colName = colName[len(table1.name)+1:]
             copiedCol = col.copy(name=f'{tableName}.{colName}')
 
             newTable.addCol(copiedCol)
         for col in table2.cols:
             colName = col.name
+            if table2.name.startswith('_joined_'):
+                colName = colName[len(table2.name)+1:]
             copiedCol = col.copy(name=f'{tableName}.{colName}')
             newTable.addCol(copiedCol)
 
@@ -646,27 +742,80 @@ class DataBase:
                 newRow = dict()
                 for row1Key in row1:
                     if row1Key != '_isReferred':
-                        newRow[f'{tableName}.{row1Key}'] = row1[row1Key]
+                        tmpRowKey = row1Key
+                        if table1.name.startswith('_joined_'):
+                            tmpRowKey = row1Key[len(table1.name)+1:]
+                        newRow[f'{tableName}.{tmpRowKey}'] = row1[row1Key]
                 for row2Key in row2:
                     if row2Key != '_isReferred':
-                        newRow[f'{tableName}.{row2Key}'] = row2[row2Key]
+                        tmpRowKey = row2Key
+                        if table2.name.startswith('_joined_'):
+                            tmpRowKey = row2Key[len(table2.name)+1:]
+                        newRow[f'{tableName}.{tmpRowKey}'] = row2[row2Key]
                 newTable.rows.append(newRow)
-        newTable.addOriginalTable(table1)
-        newTable.addOriginalTable(table2)
         return newTable
 
     def _select(self, query):
         def getTableList(inputQ):
-            # select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
+            # 1. column label 정보를 구함.
+            selectedColTrees = list(inputQ.find_data('selected_column'))
+            colLabelInfos = []
+            for colTree in selectedColTrees:
+                tableNameList = []
+                colNameList = []
+                for child in colTree.children:
+                    if type(child) is Tree:
+                        if child.data == "column_name":
+                            colNameList.append(child.children[0].value)
+                        elif child.data == "table_name":
+                            tableNameList.append(child.children[0].value)
+                labelInfo = dict()
+                labelInfo["count"] = 0
+                if len(tableNameList) == 1:
+                    labelInfo["tableName"] = tableNameList[0]
+                else:
+                    labelInfo["tableName"] = None
+                labelInfo["colName"] = colNameList[0]
+                if len(colNameList) == 2:
+                    labelInfo["label"] = colNameList[1]
+                else:
+                    labelInfo["label"] = colNameList[0]  # label 이 없는 경우 원래 이름이랑 똑같이 label 설정함.
+                colLabelInfos.append(labelInfo)
+
+            # 2. select 하고자 하는 table 들의 list를 구함. 가명을 쓰고 있으면 table name 가명으로 바꿔서 집어넣음.
             referredTables = []
             referredTableTrees = list(inputQ.find_data('referred_table'))
             for referred in referredTableTrees:
                 tableName = referred.children[0].children[0].value
                 table = self.getTable(tableName)
+                if table is None:
+                    raise SelectTableExistenceError(f"Selection has failed: '{tableName}' does not exist")
                 if len(referred.children) == 3:
                     alias = referred.children[2].children[0].value
                     table = table.copy(alias)
+
+                for col in table.cols:
+                    for labelInfo in colLabelInfos:
+                        label = labelInfo["label"]
+
+                        tableName = labelInfo["tableName"]
+                        if tableName == table.name:
+                            colName = labelInfo["colName"]
+                            if f"{tableName}.{colName}" == col.name:
+                                col.label = label
+                                labelInfo["count"] += 1
+                        elif tableName is None:
+                            colName = labelInfo["colName"]
+                            if colName == col.name[len(table.name) + 1:]:
+                                col.label = label
+                                labelInfo["count"] += 1
+
                 referredTables.append(table)
+
+            for labelInfo in colLabelInfos:
+                if labelInfo["count"] != 1:
+                    raise SelectColumnResolveError(f"Selection has failed: fail to resolve '{labelInfo['colName']}'")
+
             return referredTables
 
         try:
@@ -682,37 +831,38 @@ class DataBase:
                     tmpTables.append(table)
             for i in range(1, len(tableList)):
                 tableWeWant = self._join_helper(tableWeWant, tableList[i], None)
+                # 모든 항목에 대해 다 join 함.
                 # join 중간에 나오는 임시 테이블들은 다 없에야 하므로 따로 저장.
                 tmpTables.append(tableWeWant)
             # where 절 처리를 위해 잠시 tables 에 넣어줌
             if tableWeWant not in self.tables:
                 self.tables.append(tableWeWant)
 
+            # 어떤 column 을 select 할 것이냐
             selectList = selectQuery.children[1].children
-            selectedColNames = []
+            selectedColumns = []
             for colTree in selectList:
-                nameElements = colTree.children
-                if nameElements[0].data == 'column_name':
-                    originalName = nameElements[0].children[0].value
-                    if len(nameElements) != 1:
-                        newName = nameElements[2].children[0].value
-                        tableWeWant.setColLabel(originalName, newName)
-                        selectedColNames.append(newName)
-                    else:
-                        selectedColNames.append(originalName)
-                elif nameElements[0].data == 'table_name':
-                    tableName = nameElements[0].children[0].value
-                    originalName = nameElements[1].children[0].value
-                    if len(nameElements) != 2:
-                        newName = nameElements[3].children[0].value
-                        # tableWhatWeWant 에 tableName.colName 형태로 안 저장되어 있을수도 있으므로 한 번 더 체크함.
-                        if not tableWeWant.changeColName(tableName + '.' + originalName, newName):
-                            tableWeWant.changeColName(originalName, newName)
-                        selectedColNames.append(newName)
-                    else:
-                        selectedColNames.append(tableName + '.' + originalName)
-                else:
-                    raise SyntaxError
+                colTableName = None
+                colTNList = list(colTree.find_data("table_name"))
+                colCNList = list(colTree.find_data("column_name"))
+                if len(colTNList) == 1:
+                    colTableName = colTNList[0].children[0].value
+                colColName = colCNList[0].children[0].value
+
+                expectedColName = colColName
+                if colTableName is not None:
+                    expectedColName = f"{colTableName}.{colColName}"
+                candidates = []
+                for col in tableWeWant.cols:
+                    if isEndWith(colName=expectedColName, tableColName=col.name):
+                        candidates.append(col)
+                if len(candidates) != 1:
+                    raise SelectColumnResolveError(f"Selection has failed: fail to resolve '{expectedColName}'")
+                selectedColumns.append(candidates[0])
+            # when select *
+            if len(selectedColumns) == 0:
+                for col in tableWeWant.cols:
+                    selectedColumns.append(col)
 
             tableExpressionTree = selectQuery.children[2]
             whereClauses = list(tableExpressionTree.find_data('where_clause'))
@@ -723,29 +873,38 @@ class DataBase:
                     rowsWeWant.append(row)
             else:
                 whereClause = whereClauses[0]
+                # row_가 하나도 없을 때 WhereColumnNotExist, WhereAmbiguousReference 체크하기 위해 필요함.
+                self._where(whereClause, "dummy_data", tableWeWant.name)
                 for row in tableWeWant.rows:
-                    if self._where(whereClause, row, tableWeWant.name):
+                    if self._where(whereClause, row, tableWeWant.name) == True:
                         rowsWeWant.append(row)
 
             # 출력 양식을 위한 함수들.
             def getTabSize(n: int):
-                return max(((n - 1) // 4) * 4, 16)
+                minTabSize = (n - 1) // 4
+                return max((minTabSize + 1) * 4, 16)
 
             def printRow(row: dict, tabSizeInfo: list):
                 logStr = '|'
-                for i in range(len(tableWeWant.cols)):
+                for i in range(len(selectedColumns)):
                     tabSize = tabSizeInfo[i]
-                    colName = tableWeWant.cols[i].name
-                    data = str(row[colName])
-                    logStr += f' {data}{" "*(tabSize - len(data))} |'
+                    colName = selectedColumns[i].name
+                    data = row[colName]
+                    dataStr = str(data)
+                    if data is None:
+                        dataStr = "null"
+                    logStr += f' {dataStr}{" " * (tabSize - len(dataStr))} |'
                 print(logStr)
 
             maxLenInfo = []
-            for col in tableWeWant.cols:
-                maxLenInfo.append(len(col.label))
+            for col in selectedColumns:
+                label = col.label
+                if label is None:
+                    label = col.name[len(tableWeWant.name)+1:]
+                maxLenInfo.append(len(label))
             for row in rowsWeWant:
-                for i in range(len(tableWeWant.cols)):
-                    col = tableWeWant.cols[i]
+                for i in range(len(selectedColumns)):
+                    col = selectedColumns[i]
                     dataLen = len(str(row[col.name]))
                     if maxLenInfo[i] < dataLen:
                         maxLenInfo[i] = dataLen
@@ -754,10 +913,12 @@ class DataBase:
                 tabSizeInfo.append(getTabSize(n))
             border = '+'
             colNameLogStr = '|'
-            for i in range(len(tableWeWant.cols)):
+            for i in range(len(selectedColumns)):
                 tabSize = tabSizeInfo[i]
-                colLabel = tableWeWant.cols[i].label
-                border += f"-{'-'*tabSize}-+"
+                colLabel = selectedColumns[i].label
+                if colLabel is None:
+                    colLabel = selectedColumns[i].name[len(tableWeWant.name)+1:]
+                border += f"-{'-' * tabSize}-+"
                 colNameLogStr += f' {colLabel}{" " * (tabSize - len(colLabel))} |'
             print(border)
             print(colNameLogStr)

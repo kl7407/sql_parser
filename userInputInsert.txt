@@ -1,1 +1,64 @@
-insert into account values(9732, 'Perryridge');
+create table person (
+    id int,
+    name char(10),
+    sex char(1),
+    birthday date,
+    primary key (id, name)
+);
+
+create table love (
+    a_id int,
+    b_id int,
+    primary key (a_id, b_id),
+    foreign key (a_id) references person(id),
+    foreign key (b_id) references person(id)
+);
+
+insert into person(name, sex, id) values(400, 'Woo', 'M');
+insert into person(name, sex, id) values('Woo', 'M', 1400);
+insert into person(name, sex, id, birthday) values(400, 'Woo', 'M', 1997-05-01);
+
+insert into person values(1000, 'Jhon', "M", 1990-05-01);
+insert into person(name, sex, id, birthday) values('Woo', 'M', 1400, 1997-05-01);
+insert into person values(2000, 'Katarina', "W", 1995-07-03);
+insert into person values(2020, 'Catherin', "W", 1994-04-04);
+insert into person values(2040, 'Kim', "W", 1999-07-03);
+insert into person values(2033, 'Woo', "W", 1999-05-14);
+insert into person values(1009, 'Shin', "M", 2000-12-01);
+
+insert into love values(null, null);
+insert into love values(1, 1000);
+insert into love values(100, 123);
+
+insert into love values(1000, 2000);
+insert into love values(1000, 2000);
+
+insert into love values(2000, 2000);
+insert into love values(2000, 1000);
+insert into love values(2000, 1400);
+insert into love values(1400, 2040);
+insert into love values(2040, 1400);
+
+show tables;
+
+select * from person;
+select * from love;
+
+select a.name as who_give_love, b.name as be_loved
+from love, person as a, person as b
+where love.a_id = a.id and love.b_id = b.id;
+
+select a.name as couple, b.name as couple
+from love as a_loves_b, love as b_loves_a, person as a, person as b
+where (a_loves_b.a_id = a.id and a_loves_b.b_id = b.id) and (b_loves_a.a_id=b.id and b_loves_a.b_id=a.id)
+    and (a.id > b.id)
+;
+
+select name as narcissist
+from love as l1, person
+where id = l1.a_id and person.id = l1.b_id;
+
+drop table person;
+drop table love;
+drop table person;
+exit;

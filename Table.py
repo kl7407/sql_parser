@@ -4,18 +4,19 @@ from errors import *
 
 
 class Column:
-    def __init__(self, dataType: str, name: str, label: str, maxLen=1000, isNotNull=False):
+    def __init__(self, dataType: str, name: str, label=None, maxLen=1000, isNotNull=False):
         self.dataType = dataType
         self.name = name  # 모든 column 의 이름이 다름.
         self.label = label
         self.maxLen = maxLen
         self.isNotNull = isNotNull
         self.beReferredCnt = 0
-        # TODO: 현재 컬럼 이름을 바꿔서 select output 에 사용하는데, 이름을 바꾸는 게 아니라 label 을 추가해서 출력할 때 바꾸도록 해야함.
-        # TODO: 또한 현재 상태에서는 join 안 한 table 에 select as 사용하면 column name 이 싹 바뀌는데 이것도 해결해야 함.
 
     def __str__(self):
-        return f"{self.dataType}/{self.name}/{self.label}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
+        label = self.label
+        if label is None:
+            label = ""
+        return f"{self.dataType}/{self.name}/{label}/{self.maxLen}/{self.isNotNull}/{self.beReferredCnt}"
 
     def copy(self, name=None, label=None):
         if name is None:
@@ -35,7 +36,7 @@ class Table:
         self.didSetPKeys = False
         self.fKeys = []
         self.refTables = []
-        self.originalTables = []  # for join
+        self.refMeTables = []
         self.db = None
         self.filePath = f'./database/{self.name}.db'
         if initDB:
@@ -120,12 +121,14 @@ class Table:
                 raise ReferenceNonPrimaryKeyError(
                     'Create table has failed: foreign key references non primary key column'
                 )
+        '''
         for pKeyName in realRefPKeyNameList:
             if pKeyName not in refPKeyNameList:
                 self.drop()
                 raise ReferenceNonPrimaryKeyError(
                     'Create table has failed: foreign key references non primary key column'
                 )
+        '''
 
         for i in range(len(refPKeyNameList)):
             colName = myFKeyNameList[i]
@@ -161,11 +164,12 @@ class Table:
             newFKeyInfo['referredColName'] = refCol.name
             refCol.beReferredCnt += 1
             self.refTables.append(referredTable)
+            referredTable.refMeTables.append(self)
             self.fKeys.append(newFKeyInfo)
             if self.db is not None:
                 self.db.put(b'fKeys', str(self.fKeys))
 
-    def _getRefTableByName(self, tableName):
+    def getRefTableByName(self, tableName):
         for table in self.refTables:
             if table.name == tableName:
                 return table
@@ -177,7 +181,7 @@ class Table:
             myColName = fKeyInfo['column']
             refTableName = fKeyInfo['referredTableName']
             refColName = fKeyInfo['referredColName']
-            refTable = self._getRefTableByName(refTableName)
+            refTable = self.getRefTableByName(refTableName)
             if refTable is None:
                 raise SyntaxError
             isIn = False
@@ -214,16 +218,21 @@ class Table:
         for col in self.cols:
             data = rowInfo.setdefault(col.name, dict())
             # 해당 column 정보가 없을 경우
-            if len(data.keys()) == 0 and col.isNotNull:
-                raise InsertColumnNonNullableError(
-                    f"Insertion has failed: '[{col.label}]' is not nullable")
+            if len(data.keys()) == 0:
+                raise InsertTypeMismatchError("Insertion has failed: Types are not matched")
             # data type 이 안 맞을 경우
             if data.setdefault('type', None) != col.dataType:
                 raise InsertTypeMismatchError('Insertion has failed: Types are not matched')
-            # 해당 data 가 null 일 경우
+            # 해당 data 가 null 일 경우 nullable check
             value = data.setdefault('value', None)
             if value is None and col.isNotNull:
-                raise InsertColumnNonNullableError(f"Insertion has failed: '{col.label}' is not nullable")
+                label = col.label
+                if label is None:
+                    label = col.name.split('.')[-1]
+                raise InsertColumnNonNullableError(f"Insertion has failed: '{label}' is not nullable")
+            # char_일 경우 maxLen_보다 더 긴 값이 들어올 경우 잘라줌.
+            if col.dataType == 'char' and (value is not None) and len(value) > col.maxLen:
+                value = value[:col.maxLen]
             row[col.name] = value
         # reference integrity constraint 확인
         if not self._checkRefIntegrityConstraint(rowInfo):
@@ -246,62 +255,87 @@ class Table:
             self.db.put(keyStr.encode(), str(row))
 
     def deleteRow(self, row):
+        """
+        :return Bool
+        """
+        # 먼저 해당 row 를 참조하고 있는 row_가 있는지 확인함.
+        if row.setdefault("_isReferred", 0) != 0:
+            # 참조하는 row_가 있으면 해당 row_들을 찾고 nullable 여부 확인함.
+            beUpdatedRowInfos = []
+            for table in self.refMeTables:
+                myColNames = []
+                itsColNames = []
+                for itsFKey in table.fKeys:
+                    if itsFKey['referredTableName'] == self.name:
+                        if itsFKey['referredColName'] not in myColNames:
+                            myColNames.append(itsFKey['referredColName'])
+                            itsColNames.append(itsFKey['column'])
+                for itsRow in table.rows:
+                    isReferMe = len(myColNames) != 0
+                    for i in range(len(myColNames)):
+                        myValue = row[myColNames[i]]
+                        itsValue = itsRow[itsColNames[i]]
+                        isReferMe &= myValue == itsValue
+                    if isReferMe:
+                        # 만약 row_를 참조하고 있다면 -> 참조하는 itsCol_이 non-nullable 이라면 안 지음.
+                        for itsColName in itsColNames:
+                            for itsCol in table.cols:
+                                if itsCol.name == itsColName:
+                                    if itsCol.isNotNull:
+                                        return False
+                        # 다 nullable 이라면 beUpdatedRowInfo_에 넣어줌.
+                        beUpdatedRowInfos.append((itsRow, itsColNames))
+
+            for beUpdatedRowInfo in beUpdatedRowInfos:
+                itsRow = beUpdatedRowInfo[0]
+                itsColNames = beUpdatedRowInfo[1]
+                for itsColName in itsColNames:
+                    itsRow[itsColName] = None
+
+
         self.db.delete(self._getKeyStr(row).encode())
         self.rows.remove(row)
         for fKeyInfo in self.fKeys:
             myColName = fKeyInfo['column']
             refTableName = fKeyInfo['referredTableName']
             refColName = fKeyInfo['referredColName']
-            refTable = self._getRefTableByName(refTableName)
+            refTable = self.getRefTableByName(refTableName)
             if refTable is None:
+                # 이런 경우는 없으므로
                 raise SyntaxError
             if row[myColName] is None:
+                # value == null 이면 참조한 게 없으므로 _isReferred 바꿀 필요가 없음.
                 continue
+            # value 가 있을 경우
             for refRow in refTable.rows:
                 if refRow[refColName] == row[myColName]:
                     refRow['_isReferred'] -= 1
                     refTable.updateRowAtDB(refRow)
                     break
+        return True
 
     def updateRowAtDB(self, row):
         keyStr = self._getKeyStr(row)
         if self.db is not None:
             self.db.put(keyStr.encode(), str(row))
 
-    def addOriginalTable(self, table):
-        if len(table.originalTables) == 0:
-            self.originalTables.append(table)
-        else:
-            for originalTable in table.originalTables:
-                self.originalTables.append(originalTable)
-
-    def findColWithOriginalTableName(self, colName):
-        outputs = []
-        for originalTable in self.originalTables:
-            for col in originalTable.cols:
-                if colName == f'{originalTable.name}.{col.name}':
-                    outputs.append(col)
-        cnt = len(outputs)
-        if cnt == 0:
-            return None
-        elif cnt == 1:
-            return outputs[0]
-        else:
-            raise SyntaxError
-
     def copy(self, alias):
         # join 에서 가명으로 불릴 때를 위해 사용함. 임시로 사용되는 것이므로 db file 만들 필요 없음(self.initDBFile() X).
+        # pKey, fKey 다 필요없
         if (alias is None) or (type(alias) is not str):
             raise SyntaxError
         newTable = Table(alias, False)
         # isReferred = False 로 만들기 위해.
         for col in self.cols:
-            newTable.cols.append(col.copy(name=f'{alias}.{col.name}'))
+            colNameWithoutTableName = col.name[len(self.name)+1:]
+            newTable.cols.append(col.copy(name=f'{alias}.{colNameWithoutTableName}'))
+        '''
         # pKeys 에 들어가는 건 cols 에 있는 것과 똑같은 객체이므로.
         for pKey in self.pKeys:
             for col in newTable.cols:
+                colNameWithoutTableName = col.name[len(self.name) + 1:]
                 if col.name == pKey.name:
-                    newTable.setPrimaryKey(f'{alias}.{col.name}')
+                    newTable.setPrimaryKey(f'{alias}.{colNameWithoutTableName}')
                     break
         newTable.didSetPKeys = True
 
@@ -311,16 +345,16 @@ class Table:
             newFKey['referredTableName'] = fKey['referredTableName']
             newFKey['referredColName'] = fKey['referredColName']
             newTable.fKeys.append(newFKey)
-        newTable.rows = []
+        
         for refTable in self.refTables:
             newTable.refTables.append(refTable)
-        for ori in self.originalTables:
-            newTable.originalTables.append(ori)
-
+        '''
+        newTable.rows = []
         for row in self.rows:
             newRow = dict()
             for col in self.cols:
-                newRow[f'{alias}.{col.name}'] = row[{col.name}]
+                colNameWithoutTableName = col.name[len(self.name) + 1:]
+                newRow[f'{alias}.{colNameWithoutTableName}'] = row[col.name]
             newTable.rows.append(newRow)
         return newTable
 
@@ -341,7 +375,10 @@ class Table:
 
         colInfos = []
         for col in self.cols:
-            labelLen = len(col.label)
+            label = col.label
+            if label is None:
+                label = col.name.split('.')[1]
+            labelLen = len(label)
             if maxLen < labelLen:
                 maxLen = labelLen
             dataType = col.dataType
@@ -368,8 +405,11 @@ class Table:
         for i in range(len(self.cols)):
             col = self.cols[i]
             colInfo = colInfos[i]
-            tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(col.label)
-            tabbedName = col.label + ' ' * tabSize
+            label = col.label
+            if label is None:
+                label = col.name.split('.')[1]
+            tabSize = max((2 + (maxLen-1)//4)*4, 16) - len(label)
+            tabbedName = label + ' ' * tabSize
             print(f'{tabbedName}{colInfo}')
         print('-------------------------------------------------')
 
@@ -403,7 +443,7 @@ class Table:
         for col in self.cols:
             if col.beReferredCnt != 0:
                 raise DropReferencedTableError(f"Drop table has failed: '{self.name}' is referenced by other table")
-        # referred table 에서 isReferred = False 로 변경.
+        # referred table_에서 isReferred = False 로 변경.
         for fKeyInfo in self.fKeys:
             refTableName = fKeyInfo['referredTableName']
             refColName = fKeyInfo['referredColName']
@@ -414,5 +454,6 @@ class Table:
                             col.beReferredCnt -= 1
                             break
                     break
-        self.closeFile()
-        os.remove(f'./database/{self.name}.db')
+        if self.db is not None:
+            self.db.close()
+            os.remove(f'./database/{self.name}.db')

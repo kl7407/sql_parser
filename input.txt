@@ -1,46 +1,3 @@
-create table a (
-    id int,
-    name char(20),
-    primary key (id)
-);
-create table b (
-    id int,
-    a_id int,
-    primary key (id),
-    foreign key (a_id) references a(id)
-);
-create table c (
-    id int,
-    a_id int,
-    b_id int,
-    primary key (id, a_id, b_id),
-    foreign key (a_id) references a(id),
-    foreign key (b_id) references b(id)
-);
-create table d (
-    id int,
-    name char(20) not null,
-    a_id int,
-    primary key (id),
-    foreign key (a_id) references a(id)
-);
-
-create table x (
-    id char(20),
-    name char(50),
-    primary key (id)
-);
-
-create table z (
-    id char(20),
-    c_id int,
-    ca_id int,
-    cb_id int,
-    primary key (id),
-    foreign key (c_id, ca_id, cb_id) references c(id, a_id, b_id)
-);
-
-
 create table person (
     person_id int not null,
     person_name char(20),
@@ -84,15 +41,19 @@ insert into account values(5, 'Seoul', null, 1500);
 insert into account values(6, 'Seoul2', null, 1600);
 select * from account;
 select * from person;
-delete from person;
-delete from account where (not branch_name = 'Perryridge') and ((person_id is null) or assets <= 1300);
-select * from account;select * from person;
-select *
-    from account, person as student, person
-    where account.account_number < 10 or person.assets = student.assets;
-desc person;
-desc account;
-show tables;
+
+delete from person where sex = 'w';
+
+select * from account;
+select * from person;
+
+select * from account
+where name = "test";
+
+
+select account_number as ac, student1.person_id as std1_id, student2.person_id as person_id
+    from account, person as student1, person as student2
+    where ac < 10 or std1_id = person_id;
 DROP TABLE account;
 drop table person;
 exit;
